@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Communication Timeline — Agent Mail{% endblock %}
+{% block title %}{{ _("Communication Timeline") }} — {{ _("Agent Mail") }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
-  <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">Projects</a>
+  <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">{{ _("Projects") }}</a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <a href="/mail/archive/guide" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">Archive</a>
+  <a href="/mail/archive/guide" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">{{ _("Archive") }}</a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <span class="text-slate-900 dark:text-white font-medium">Timeline</span>
+  <span class="text-slate-900 dark:text-white font-medium">{{ _("Timeline") }}</span>
 </nav>
 {% endblock %}
 
@@ -20,8 +20,8 @@
         <i data-lucide="git-branch" class="w-8 h-8 text-white"></i>
       </div>
       <div>
-        <h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-1">Communication Timeline</h1>
-        <p class="text-slate-600 dark:text-slate-400">Visual message flow for {{ project_name }}</p>
+      <h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-1">{{ _("Communication Timeline") }}</h1>
+      <p class="text-slate-600 dark:text-slate-400">{{ _("Visual message flow for") }} {{ project_name }}</p>
       </div>
     </div>
   </div>
@@ -31,7 +31,7 @@
       <div id="timeline-container" class="min-h-[600px] flex items-center justify-center">
         <div class="text-center">
           <div class="animate-spin w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-          <p class="text-slate-600 dark:text-slate-400">Generating timeline...</p>
+    <p class="text-slate-600 dark:text-slate-400">{{ _("Generating timeline...") }}</p>
         </div>
       </div>
     </div>

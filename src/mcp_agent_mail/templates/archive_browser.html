@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Archive Browser — Agent Mail{% endblock %}
+{% block title %}{{ _("Archive Browser") }} — {{ _("Agent Mail") }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
-  <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">Projects</a>
+  <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">{{ _("Projects") }}</a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
   <a href="/mail/archive/guide" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">Archive</a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <span class="text-slate-900 dark:text-white font-medium">Browser</span>
+  <span class="text-slate-900 dark:text-white font-medium">{{ _("Browser") }}</span>
 </nav>
 {% endblock %}
 
@@ -20,8 +20,8 @@
         <i data-lucide="folder-tree" class="w-8 h-8 text-white"></i>
       </div>
       <div>
-        <h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-1">Archive Browser</h1>
-        <p class="text-slate-600 dark:text-slate-400">Navigate and explore Git archive structure</p>
+      <h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-1">{{ _("Archive Browser") }}</h1>
+      <p class="text-slate-600 dark:text-slate-400">{{ _("Navigate and explore Git archive structure") }}</p>
       </div>
     </div>
   </div>
@@ -51,7 +51,7 @@
       <template x-if="!selected">
         <div class="flex flex-col items-center justify-center py-20 text-slate-500 dark:text-slate-400">
           <i data-lucide="mouse-pointer-click" class="w-16 h-16 mb-4"></i>
-          <p>Select a file to view its contents</p>
+            <p>{{ _("Select a file to view its contents") }}</p>
         </div>
       </template>
 
@@ -76,7 +76,7 @@
       <template x-if="selected && selected.type === 'dir'">
         <div class="flex flex-col items-center justify-center py-20 text-slate-500 dark:text-slate-400">
           <i data-lucide="folder-open" class="w-16 h-16 mb-4"></i>
-          <p>Directory selected - click a file to view its contents</p>
+            <p>{{ _("Directory selected - click a file to view its contents") }}</p>
         </div>
       </template>
     </div>

@@ -1,19 +1,19 @@
 {% extends "base.html" %}
 
-{% block title %}{{ thread_subject }} — Thread{% endblock %}
+{% block title %}{{ thread_subject }} — {{ _("Thread") }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
   <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors flex items-center gap-1">
     <i data-lucide="home" class="w-3.5 h-3.5"></i>
-    Projects
+    {{ _("Projects") }}
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
   <a href="/mail/{{ project.slug }}" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
     {{ project.human_key }}
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <span class="text-slate-900 dark:text-white font-medium">Thread Conversation</span>
+    <span class="text-slate-900 dark:text-white font-medium">{{ _("Thread Conversation") }}</span>
 </nav>
 {% endblock %}
 
@@ -47,7 +47,7 @@
         <a href="/mail/{{ project.slug }}"
            class="px-3 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-all duration-200 flex items-center gap-2 text-sm font-medium">
           <i data-lucide="arrow-left" class="w-4 h-4"></i>
-          Back to Project
+      {{ _("Back to Project") }}
         </a>
       </div>
     </div>
@@ -82,7 +82,7 @@
                   {% if msg.body_md %}
                     {{ msg.body_md|striptags|truncate(150, killwords=False, end='...') }}
                   {% else %}
-                    <em class="text-slate-400">No content</em>
+                  <em class="text-slate-400">{{ _("No content") }}</em>
                   {% endif %}
                 </div>
               </div>
@@ -94,12 +94,12 @@
               {% if msg.importance == 'urgent' %}
                 <span class="px-2.5 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-xs font-semibold rounded-full flex items-center gap-1">
                   <i data-lucide="alert-circle" class="w-3 h-3"></i>
-                  Urgent
+                  {{ _("Urgent") }}
                 </span>
               {% elif msg.importance == 'high' %}
                 <span class="px-2.5 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-xs font-semibold rounded-full flex items-center gap-1">
                   <i data-lucide="alert-triangle" class="w-3 h-3"></i>
-                  High
+                  {{ _("High") }}
                 </span>
               {% endif %}
 
@@ -150,7 +150,7 @@
               <a href="/mail/{{ project.slug }}/message/{{ msg.id }}"
                  class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-colors text-sm font-medium">
                 <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
-                View Full Message
+              {{ _("View Full Message") }}
               </a>
             </div>
 
@@ -168,14 +168,14 @@
   <div class="bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
     <div class="flex items-center justify-between">
       <div class="text-sm text-slate-600 dark:text-slate-400">
-        <p class="mb-1">End of conversation</p>
+        <p class="mb-1">{{ _("End of conversation") }}</p>
         <p class="text-xs">{{ message_count }} message{{ 's' if message_count != 1 else '' }} in this thread</p>
       </div>
 
       <a href="/mail/{{ project.slug }}"
          class="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 font-medium">
         <i data-lucide="arrow-left" class="w-4 h-4"></i>
-        Back to Project
+        {{ _("Back to Project") }}
       </a>
     </div>
   </div>

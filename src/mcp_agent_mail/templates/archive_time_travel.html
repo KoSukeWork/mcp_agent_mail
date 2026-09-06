@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Time Travel — Agent Mail{% endblock %}
+{% block title %}{{ _("Time Travel") }} — {{ _("Agent Mail") }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
-  <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">Projects</a>
+  <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">{{ _("Projects") }}</a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <a href="/mail/archive/guide" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">Archive</a>
+  <a href="/mail/archive/guide" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">{{ _("Archive") }}</a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <span class="text-slate-900 dark:text-white font-medium">Time Travel</span>
+  <span class="text-slate-900 dark:text-white font-medium">{{ _("Time Travel") }}</span>
 </nav>
 {% endblock %}
 
@@ -20,8 +20,8 @@
         <i data-lucide="clock" class="w-8 h-8 text-white"></i>
       </div>
       <div>
-        <h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-1">Time Travel</h1>
-        <p class="text-slate-600 dark:text-slate-400">View historical snapshots of agent inboxes</p>
+      <h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-1">{{ _("Time Travel") }}</h1>
+      <p class="text-slate-600 dark:text-slate-400">{{ _("View historical snapshots of agent inboxes") }}</p>
       </div>
     </div>
   </div>
@@ -34,9 +34,9 @@
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
       <div>
-        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">Project</label>
+        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">{{ _("Project") }}</label>
         <select x-model="selectedProject" class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent">
-          <option value="">Select project...</option>
+          <option value="">{{ _("Select project...") }}</option>
           {% for proj in projects %}
             <option value="{{ proj }}">{{ proj }}</option>
           {% endfor %}
@@ -44,7 +44,7 @@
       </div>
 
       <div>
-        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">Agent</label>
+        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">{{ _("Agent") }}</label>
         <select x-model="selectedAgent" :disabled="!selectedProject || loadingAgents" class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-slate-100 dark:disabled:bg-slate-800 disabled:text-slate-400">
           <option value="" x-text="loadingAgents ? 'Loading agents...' : (!selectedProject ? 'Select project first...' : (agents.length === 0 ? 'No agents found' : 'Select agent...'))"></option>
           <template x-for="agent in agents" :key="agent">
@@ -54,7 +54,7 @@
       </div>
 
       <div>
-        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">Date & Time</label>
+        <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">{{ _("Date & Time") }}</label>
         <input type="datetime-local" x-model="selectedTime" class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent">
       </div>
     </div>
@@ -132,8 +132,8 @@
         <template x-if="snapshot.messages.length === 0">
           <div class="flex flex-col items-center justify-center py-12 text-slate-500 dark:text-slate-400">
             <i data-lucide="inbox" class="w-16 h-16 mb-4"></i>
-            <p class="text-base mb-2">Inbox was empty at this time</p>
-            <p class="text-sm text-slate-400 dark:text-slate-500 max-w-md text-center">No messages existed in this agent's inbox at the selected timestamp. Messages may have been received later or already processed before this point.</p>
+          <p class="text-base mb-2">{{ _("Inbox was empty at this time") }}</p>
+          <p class="text-sm text-slate-400 dark:text-slate-500 max-w-md text-center">{{ _("No messages existed in this agent's inbox at the selected timestamp. Messages may have been received later or already processed before this point.") }}</p>
           </div>
         </template>
       </div>

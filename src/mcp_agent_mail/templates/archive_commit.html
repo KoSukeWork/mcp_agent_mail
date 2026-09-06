@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}Commit {{ commit.short_sha }} — Agent Mail{% endblock %}
+{% block title %}{{ _("Commit") }} {{ commit.short_sha }} — {{ _("Agent Mail") }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
   <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
-    Projects
+    {{ _("Projects") }}
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
   <a href="/mail/archive/guide" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
@@ -68,15 +68,15 @@
       <div class="grid grid-cols-3 gap-4">
         <div class="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-white mb-1">{{ commit.stats.files }}</div>
-          <div class="text-xs text-white/80 font-medium uppercase tracking-wide">Files Changed</div>
+          <div class="text-xs text-white/80 font-medium uppercase tracking-wide">{{ _("Files Changed") }}</div>
         </div>
         <div class="bg-emerald-500/20 backdrop-blur-sm rounded-xl p-4 border border-emerald-300/30">
           <div class="text-2xl font-bold text-white mb-1">+{{ commit.stats.insertions }}</div>
-          <div class="text-xs text-white/80 font-medium uppercase tracking-wide">Insertions</div>
+          <div class="text-xs text-white/80 font-medium uppercase tracking-wide">{{ _("Insertions") }}</div>
         </div>
         <div class="bg-red-500/20 backdrop-blur-sm rounded-xl p-4 border border-red-300/30">
           <div class="text-2xl font-bold text-white mb-1">-{{ commit.stats.deletions }}</div>
-          <div class="text-xs text-white/80 font-medium uppercase tracking-wide">Deletions</div>
+          <div class="text-xs text-white/80 font-medium uppercase tracking-wide">{{ _("Deletions") }}</div>
         </div>
       </div>
     </div>
@@ -208,7 +208,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('diff-viewer').innerHTML = `
       <div class="flex flex-col items-center justify-center py-12 text-slate-500 dark:text-slate-400">
         <i data-lucide="info" class="w-12 h-12 mb-4"></i>
-        <p class="text-center">No diff available for this commit</p>
+      <p class="text-center">{{ _("No diff available for this commit") }}</p>
       </div>
     `;
     lucide.createIcons();

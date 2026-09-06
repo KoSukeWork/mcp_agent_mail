@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Network Graph — Agent Mail{% endblock %}
+{% block title %}{{ _("Network Graph") }} — {{ _("Agent Mail") }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
-  <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">Projects</a>
+  <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">{{ _("Projects") }}</a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <a href="/mail/archive/guide" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">Archive</a>
+  <a href="/mail/archive/guide" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">{{ _("Archive") }}</a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <span class="text-slate-900 dark:text-white font-medium">Network Graph</span>
+  <span class="text-slate-900 dark:text-white font-medium">{{ _("Network Graph") }}</span>
 </nav>
 {% endblock %}
 
@@ -20,8 +20,8 @@
         <i data-lucide="network" class="w-8 h-8 text-white"></i>
       </div>
       <div>
-        <h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-1">Agent Communication Network</h1>
-        <p class="text-slate-600 dark:text-slate-400">Interactive visualization for {{ project_name }}</p>
+      <h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-1">{{ _("Agent Communication Network") }}</h1>
+      <p class="text-slate-600 dark:text-slate-400">{{ _("Interactive visualization for") }} {{ project_name }}</p>
       </div>
     </div>
   </div>
@@ -64,15 +64,15 @@
         <div class="space-y-2 text-sm text-slate-600 dark:text-slate-400">
           <div class="flex items-center gap-2">
             <div class="w-4 h-4 rounded-full bg-primary-500"></div>
-            <span>Agent node</span>
+        <span>{{ _("Agent node") }}</span>
           </div>
           <div class="flex items-center gap-2">
             <div class="w-8 h-0.5 bg-slate-400"></div>
-            <span>Message flow</span>
+        <span>{{ _("Message flow") }}</span>
           </div>
           <div class="flex items-center gap-2">
             <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
-            <span>Size = total messages</span>
+        <span>{{ _("Size = total messages") }}</span>
           </div>
         </div>
       </div>

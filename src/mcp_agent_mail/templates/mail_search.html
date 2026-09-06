@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}Search — {{ project.human_key }}{% endblock %}
+{% block title %}{{ _("Search") }} — {{ project.human_key }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
   <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
-    Projects
+    {{ _("Projects") }}
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
   <a href="/mail/{{ project.slug }}" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
     {{ project.human_key }}
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <span class="text-slate-900 dark:text-white font-medium">Search</span>
+  <span class="text-slate-900 dark:text-white font-medium">{{ _("Search") }}</span>
 </nav>
 {% endblock %}
 
@@ -26,14 +26,14 @@
           <i data-lucide="search" class="w-8 h-8 text-white"></i>
         </div>
         <div>
-          <h1 class="text-3xl font-bold text-slate-900 dark:text-white">Search Messages</h1>
-          <p class="text-slate-600 dark:text-slate-400">Find messages across the project</p>
+          <h1 class="text-3xl font-bold text-slate-900 dark:text-white">{{ _("Search Messages") }}</h1>
+          <p class="text-slate-600 dark:text-slate-400">{{ _("Find messages across the project") }}</p>
         </div>
       </div>
       <button @click="showHelp = !showHelp"
               class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-colors flex items-center gap-2">
         <i data-lucide="help-circle" class="w-4 h-4"></i>
-        Query Help
+        {{ _("Query Help") }}
       </button>
     </div>
 
@@ -46,12 +46,12 @@
          x-transition:leave-start="opacity-100 transform translate-y-0"
          x-transition:leave-end="opacity-0 transform -translate-y-2"
          class="bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 rounded-lg p-6 mb-6">
-      <h3 class="text-lg font-semibold text-primary-900 dark:text-primary-100 mb-4">Query Syntax</h3>
+      <h3 class="text-lg font-semibold text-primary-900 dark:text-primary-100 mb-4">{{ _("Query Syntax") }}</h3>
       <div class="space-y-3 text-sm text-primary-800 dark:text-primary-200">
         <div class="flex items-start gap-3">
           <i data-lucide="search" class="w-4 h-4 mt-0.5 flex-shrink-0"></i>
           <div>
-            <div class="font-semibold">Field filters:</div>
+            <div class="font-semibold">{{ _("Field filters:") }}</div>
             <div class="font-mono bg-white dark:bg-slate-800 px-2 py-1 rounded mt-1">subject:authentication</div>
             <div class="font-mono bg-white dark:bg-slate-800 px-2 py-1 rounded mt-1">body:"API key"</div>
           </div>
@@ -59,14 +59,14 @@
         <div class="flex items-start gap-3">
           <i data-lucide="layers" class="w-4 h-4 mt-0.5 flex-shrink-0"></i>
           <div>
-            <div class="font-semibold">Combine terms:</div>
+            <div class="font-semibold">{{ _("Combine terms:") }}</div>
             <div class="font-mono bg-white dark:bg-slate-800 px-2 py-1 rounded mt-1">login AND security</div>
           </div>
         </div>
         <div class="flex items-start gap-3">
           <i data-lucide="asterisk" class="w-4 h-4 mt-0.5 flex-shrink-0"></i>
           <div>
-            <div class="font-semibold">Wildcard:</div>
+            <div class="font-semibold">{{ _("Wildcard:") }}</div>
             <div class="font-mono bg-white dark:bg-slate-800 px-2 py-1 rounded mt-1">deploy*</div>
           </div>
         </div>
@@ -87,7 +87,7 @@
           value="{{ q }}"
           placeholder='Try: subject:login body:"api key"'
           class="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-900 border-2 border-slate-300 dark:border-slate-600 rounded-xl text-lg text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200"
-          aria-label="Search messages"
+               aria-label="{{ _("Search messages") }}"
           autofocus
         />
         <input type="hidden" id="scope" name="scope" x-model="scope" />
@@ -98,7 +98,7 @@
       <div class="flex items-center gap-6 flex-wrap">
         <!-- Scope -->
         <div class="flex items-center gap-3">
-          <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Search in:</span>
+          <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ _("Search in:") }}</span>
           <div class="flex items-center gap-2">
             <button
               type="button"
@@ -106,7 +106,7 @@
               :class="scope === '' ? 'bg-primary-600 text-white ring-2 ring-primary-500' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'"
               class="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2">
               <i data-lucide="align-justify" class="w-4 h-4"></i>
-              Both
+              {{ _("Both") }}
             </button>
             <button
               type="button"
@@ -114,7 +114,7 @@
               :class="scope === 'subject' ? 'bg-primary-600 text-white ring-2 ring-primary-500' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'"
               class="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2">
               <i data-lucide="heading" class="w-4 h-4"></i>
-              Subject
+              {{ _("Subject") }}
             </button>
             <button
               type="button"
@@ -122,14 +122,14 @@
               :class="scope === 'body' ? 'bg-primary-600 text-white ring-2 ring-primary-500' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'"
               class="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2">
               <i data-lucide="file-text" class="w-4 h-4"></i>
-              Body
+              {{ _("Body") }}
             </button>
           </div>
         </div>
 
         <!-- Order -->
         <div class="flex items-center gap-3">
-          <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Order by:</span>
+          <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ _("Order by:") }}</span>
           <div class="flex items-center gap-2">
             <button
               type="button"
@@ -137,7 +137,7 @@
               :class="order === 'relevance' ? 'bg-primary-600 text-white ring-2 ring-primary-500' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'"
               class="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2">
               <i data-lucide="star" class="w-4 h-4"></i>
-              Relevance
+              {{ _("Relevance") }}
             </button>
             <button
               type="button"
@@ -145,7 +145,7 @@
               :class="order === 'time' ? 'bg-primary-600 text-white ring-2 ring-primary-500' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'"
               class="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2">
               <i data-lucide="clock" class="w-4 h-4"></i>
-              Time
+              {{ _("Time") }}
             </button>
           </div>
         </div>
@@ -153,14 +153,14 @@
         <!-- Boost Subject Toggle -->
         <div class="flex items-center gap-2">
           <input type="checkbox" id="boostSubject" name="boost" value="1" class="h-4 w-4 text-primary-600 border-slate-300 rounded" {% if boost %}checked{% endif %}>
-          <label for="boostSubject" class="text-sm text-slate-700 dark:text-slate-300">Boost subject</label>
+          <label for="boostSubject" class="text-sm text-slate-700 dark:text-slate-300">{{ _("Boost subject") }}</label>
         </div>
 
         <button
           type="submit"
           class="ml-auto px-6 py-3 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-lg shadow-medium hover:shadow-large transition-all duration-300 flex items-center gap-2 btn-ripple">
           <i data-lucide="search" class="w-5 h-5"></i>
-          Search
+          {{ _("Search") }}
         </button>
       </div>
     </form>
@@ -169,7 +169,7 @@
     <!-- Token Pills -->
     <!-- SECURITY: Token values are auto-escaped by Jinja2 to prevent XSS. Do not use | safe filter here. -->
     <div class="mt-2 flex items-center gap-2 flex-wrap">
-      <span class="text-slate-500 text-sm">Tokens:</span>
+      <span class="text-slate-500 text-sm">{{ _("Tokens:") }}</span>
       {% for t in tokens %}
       <span class="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs border
         {% if t.field == 'subject' %} bg-indigo-50 text-indigo-700 border-indigo-200
@@ -182,13 +182,13 @@
       {% endfor %}
     </div>
     <div class="mt-2 flex items-center gap-2">
-      <span class="text-slate-500 text-sm">Add token:</span>
+      <span class="text-slate-500 text-sm">{{ _("Add token:") }}</span>
       <select id="tokenField" class="border rounded-md px-2 py-1 text-sm" aria-label="Token field type">
-        <option value="subject">Subject</option>
-        <option value="body">Body</option>
+        <option value="subject">{{ _("Subject") }}</option>
+        <option value="body">{{ _("Body") }}</option>
       </select>
       <input id="tokenValue" class="border rounded-md px-2 py-1 text-sm" placeholder="keyword or phrase" aria-label="Token value" />
-      <button type="button" id="addTokenBtn" class="px-2 py-1 rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200 text-sm">Add</button>
+      <button type="button" id="addTokenBtn" class="px-2 py-1 rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200 text-sm">{{ _("Add") }}</button>
     </div>
     {% endif %}
   </div>
@@ -200,7 +200,7 @@
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
             <i data-lucide="list" class="w-5 h-5 text-primary-600 dark:text-primary-400"></i>
-            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Results</h3>
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ _("Results") }}</h3>
             <span class="px-2 py-1 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 text-xs font-medium rounded-full">
               {{ results|length }} found
             </span>
@@ -247,7 +247,7 @@
             {% endif %}
 
             <div class="flex items-center gap-2 mt-3 text-primary-600 dark:text-primary-400 opacity-0 group-hover:opacity-100 transition-opacity">
-              <span class="text-sm font-medium">View message</span>
+              <span class="text-sm font-medium">{{ _("View message") }}</span>
               <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition-transform"></i>
             </div>
           </a>
@@ -262,15 +262,15 @@
         <i data-lucide="search-x" class="w-12 h-12 text-slate-400 dark:text-slate-500"></i>
       </div>
       <h3 class="text-2xl font-semibold text-slate-900 dark:text-white mb-3">
-        No results found
+        {{ _("No results found") }}
       </h3>
       <p class="text-slate-600 dark:text-slate-400 mb-6 max-w-md mx-auto">
-        No messages match your search query. Try different keywords or use the query help above.
+        {{ _("No messages match your search query. Try different keywords or use the query help above.") }}
       </p>
       <button @click="document.getElementById('q').value = ''; document.getElementById('q').focus()"
               class="px-6 py-3 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg shadow-medium hover:shadow-large transition-all duration-300 flex items-center gap-2 mx-auto btn-ripple">
         <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-        Clear Search
+        {{ _("Clear Search") }}
       </button>
     </div>
   {% endif %}

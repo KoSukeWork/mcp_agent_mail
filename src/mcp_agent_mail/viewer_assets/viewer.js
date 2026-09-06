@@ -1,3 +1,81 @@
+const VIEWER_LOCALE_KEY = "agentMailViewerLocale";
+const VIEWER_ZH_CN = {
+  "Agent Mail Viewer": "智能体邮件查看器",
+  "Agent Mail": "智能体邮件",
+  "Diagnostics": "诊断信息",
+  "Toggle dark mode": "切换深色模式",
+  "Interface language": "界面语言",
+  "Database": "数据库",
+  "Source:": "来源：",
+  "Messages:": "消息：",
+  "Cache": "缓存",
+  "State:": "状态：",
+  "Supported:": "支持：",
+  "Bundle": "数据包",
+  "Generated:": "生成时间：",
+  "Schema:": "架构：",
+  "Search all messages across all projects and agents...": "搜索所有项目和智能体的消息…",
+  "Search all messages": "搜索所有消息",
+  "Clear search": "清除搜索",
+  "Filters": "筛选",
+  "Split view (Gmail style)": "分栏视图（Gmail 风格）",
+  "List view only": "仅列表视图",
+  "Thread view": "会话视图",
+  "Project": "项目",
+  "All Projects": "所有项目",
+  "Sender": "发件人",
+  "All Senders": "所有发件人",
+  "Recipient": "收件人",
+  "All Recipients": "所有收件人",
+  "Importance": "重要程度",
+  "All": "全部",
+  "Urgent": "紧急",
+  "High": "高",
+  "Normal": "普通",
+  "Low": "低",
+  "Threads": "会话",
+  "All Messages": "所有消息",
+  "Threaded Only": "仅会话消息",
+  "Non-threaded": "非会话消息",
+  "Message Type": "消息类型",
+  "Conversations": "对话",
+  "Administrative": "管理消息",
+  "Loading mailbox...": "正在加载邮箱…",
+  "Loading...": "正在加载…",
+  "No threads match the current filters.": "没有会话符合当前筛选条件。",
+  "Search by subject, ID, or snippet...": "按主题、ID 或摘要搜索…",
+  "Close message view": "关闭消息视图",
+};
+
+function initialViewerLocale() {
+  try {
+    const persisted = localStorage.getItem(VIEWER_LOCALE_KEY);
+    if (persisted === "en" || persisted === "zh-CN") {
+      return persisted;
+    }
+  } catch {
+    // Some file:// and privacy-restricted contexts disallow local storage.
+  }
+  return navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+}
+
+function translateViewer(message, locale) {
+  return locale === "zh-CN" ? (VIEWER_ZH_CN[message] || message) : message;
+}
+
+function applyViewerLocale(locale) {
+  document.documentElement.lang = locale;
+  document.querySelectorAll("[data-i18n]").forEach((element) => {
+    element.textContent = translateViewer(element.dataset.i18n, locale);
+  });
+  for (const attribute of ["placeholder", "aria-label", "title"]) {
+    const dataAttribute = `data-i18n-${attribute}`;
+    document.querySelectorAll(`[${dataAttribute}]`).forEach((element) => {
+      element.setAttribute(attribute, translateViewer(element.getAttribute(dataAttribute), locale));
+    });
+  }
+}
+
 const CACHE_SUPPORTED = typeof navigator.storage?.getDirectory === "function";
 const CACHE_PREFIX = "mailbox-snapshot";
 const state = {
@@ -709,6 +787,7 @@ function viewerController() {
 
     // Dark mode (moved here so components can reference `darkMode` directly)
     darkMode: false,
+    locale: initialViewerLocale(),
 
     // Responsive flags
     isMobile: false,
@@ -720,6 +799,7 @@ function viewerController() {
 
     async init() {
       console.info('[Alpine] Initializing viewer controller');
+      applyViewerLocale(this.locale);
       // Initialize dark mode state
       try {
         const stored = localStorage.getItem('darkMode');
@@ -748,6 +828,16 @@ function viewerController() {
           }
         });
       }
+    },
+
+    toggleLocale() {
+      this.locale = this.locale === "zh-CN" ? "en" : "zh-CN";
+      try {
+        localStorage.setItem(VIEWER_LOCALE_KEY, this.locale);
+      } catch {
+        // The active page can still switch languages without persistence.
+      }
+      this.$nextTick(() => applyViewerLocale(this.locale));
     },
 
     async initViewer() {

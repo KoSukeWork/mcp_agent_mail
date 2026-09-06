@@ -41,6 +41,15 @@ from .app import (
 )
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
+from .localization import (
+    INTERFACE_LOCALE_COOKIE,
+    get_interface_locale,
+    gettext,
+    normalize_interface_locale,
+    reset_interface_locale,
+    select_interface_locale,
+    set_interface_locale,
+)
 from .storage import (
     ProjectArchive,
     archive_write_lock,
@@ -859,7 +868,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         if value is None:
             return default
         with contextlib.suppress(Exception):
-            return int(value)
+            return int(cast(Any, value))
         return default
 
     def _rate_limits_for(self, kind: str) -> tuple[int, int]:
@@ -1449,13 +1458,15 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         # (each http_app() call owns an independent StreamableHTTPSessionManager).
         mcp_lifespan_app = cast(_FastAPILifespan, mcp_http_app)
         mcp_stateful_lifespan_app = cast(_FastAPILifespan, mcp_stateful_http_app)
-        async with mcp_lifespan_app.lifespan(mcp_http_app):
-            async with mcp_stateful_lifespan_app.lifespan(mcp_stateful_http_app):
-                await _startup()
-                try:
-                    yield
-                finally:
-                    await _shutdown()
+        async with (
+            mcp_lifespan_app.lifespan(mcp_http_app),
+            mcp_stateful_lifespan_app.lifespan(mcp_stateful_http_app),
+        ):
+            await _startup()
+            try:
+                yield
+            finally:
+                await _shutdown()
 
     # Now construct FastAPI with the composed lifespan so ASGI transports run it.
     # Give the app a real title/version so the auto-generated /openapi.json has a
@@ -1474,6 +1485,39 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         version=_package_version(),
         lifespan=lifespan_context,
     )
+
+    class InterfaceLocaleMiddleware(BaseHTTPMiddleware):
+        """Choose and persist the language used by server-rendered UI pages."""
+
+        async def dispatch(
+            self,
+            request: Request,
+            call_next: RequestResponseEndpoint,
+        ) -> Response:
+            requested_locale = request.query_params.get("lang")
+            locale = select_interface_locale(
+                query_locale=requested_locale,
+                cookie_locale=request.cookies.get(INTERFACE_LOCALE_COOKIE),
+                accept_language=request.headers.get("accept-language"),
+            )
+            token = set_interface_locale(locale)
+            try:
+                response = await call_next(request)
+            finally:
+                reset_interface_locale(token)
+
+            response.headers["Content-Language"] = locale
+            if normalize_interface_locale(requested_locale) is not None:
+                response.set_cookie(
+                    INTERFACE_LOCALE_COOKIE,
+                    locale,
+                    max_age=31_536_000,
+                    httponly=False,
+                    samesite="lax",
+                )
+            return response
+
+    fastapi_app.add_middleware(InterfaceLocaleMiddleware)
 
     # Simple request logging (configurable)
     if settings.http.request_log_enabled:
@@ -1839,6 +1883,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             autoescape=select_autoescape(["html", "xml"]),
             enable_async=True,
         )
+        env.globals["_"] = cast(Any, gettext)
+        env.globals["current_locale"] = cast(Any, get_interface_locale)
         # HTML sanitizer (allow safe images and limited CSS)
         _css_sanitizer = (
             CSSSanitizer(
@@ -2702,7 +2748,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 "mail_unified_inbox.html",
                 projects=projects_data,
                 messages=messages,
-                total_agents=sum(p["agent_count"] for p in projects_data),
+                total_agents=sum(cast(int, p["agent_count"]) for p in projects_data),
                 total_messages=len(messages),
                 filter_importance=filter_importance or "",
             )

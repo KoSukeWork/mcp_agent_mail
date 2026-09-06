@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}Activity Feed — Agent Mail{% endblock %}
+{% block title %}{{ _("Activity Feed") }} — {{ _("Agent Mail") }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
   <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
-    Projects
+    {{ _("Projects") }}
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
   <a href="/mail/archive/guide" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
     Archive
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <span class="text-slate-900 dark:text-white font-medium">Activity Feed</span>
+  <span class="text-slate-900 dark:text-white font-medium">{{ _("Activity Feed") }}</span>
 </nav>
 {% endblock %}
 
@@ -41,10 +41,10 @@
       </div>
       <div>
         <h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-1">
-          Activity Feed
+          {{ _("Activity Feed") }}
         </h1>
         <p class="text-slate-600 dark:text-slate-400">
-          Recent commits across all projects
+          {{ _("Recent commits across all projects") }}
         </p>
       </div>
     </div>
@@ -53,19 +53,19 @@
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div class="bg-white dark:bg-slate-800 rounded-xl p-4 border-2 border-slate-200 dark:border-slate-700 shadow-soft">
         <div class="text-2xl font-bold text-slate-900 dark:text-white mb-1">{{ commits|length }}</div>
-        <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">Commits</div>
+        <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">{{ _("Commits") }}</div>
       </div>
       <div class="bg-white dark:bg-slate-800 rounded-xl p-4 border-2 border-slate-200 dark:border-slate-700 shadow-soft">
         <div class="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mb-1" x-text="totalInsertions()">0</div>
-        <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">Insertions</div>
+        <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">{{ _("Insertions") }}</div>
       </div>
       <div class="bg-white dark:bg-slate-800 rounded-xl p-4 border-2 border-slate-200 dark:border-slate-700 shadow-soft">
         <div class="text-2xl font-bold text-red-600 dark:text-red-400 mb-1" x-text="totalDeletions()">0</div>
-        <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">Deletions</div>
+        <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">{{ _("Deletions") }}</div>
       </div>
       <div class="bg-white dark:bg-slate-800 rounded-xl p-4 border-2 border-slate-200 dark:border-slate-700 shadow-soft">
         <div class="text-2xl font-bold text-violet-600 dark:text-violet-400 mb-1" x-text="uniqueAuthors()">0</div>
-        <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">Authors</div>
+        <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">{{ _("Authors") }}</div>
       </div>
     </div>
   </div>
@@ -157,7 +157,7 @@
       <div class="w-24 h-24 bg-slate-200 dark:bg-slate-700 rounded-3xl flex items-center justify-center mb-6 shadow-lg">
         <i data-lucide="git-commit" class="w-12 h-12 text-slate-400 dark:text-slate-500"></i>
       </div>
-      <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-2">No commits yet</h3>
+      <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-2">{{ _("No commits yet") }}</h3>
       <p class="text-slate-600 dark:text-slate-400 text-center max-w-md">
         Commits will appear here as agents send messages and perform actions.
       </p>

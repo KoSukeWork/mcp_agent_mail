@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 
-{% block title %}Unified Inbox — Agent Mail{% endblock %}
+{% block title %}{{ _("Unified Inbox") }} — {{ _("Agent Mail") }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
   <a href="/mail" class="text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 transition-colors font-medium flex items-center gap-1">
     <i data-lucide="inbox" class="w-3.5 h-3.5"></i>
-    Unified Inbox
+    {{ _("Unified Inbox") }}
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
   <a href="#projects" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
-    Projects
+    {{ _("Projects") }}
   </a>
 </nav>
 {% endblock %}
@@ -44,15 +44,15 @@
         @input="filterMessages()"
         @keydown.escape="searchQuery = ''; filterMessages()"
         type="search"
-        placeholder="Search all messages across all projects and agents..."
+           placeholder="{{ _("Search all messages across all projects and agents...") }}"
         class="w-full pl-12 pr-4 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 focus:border-primary-500 dark:focus:border-primary-500 rounded-xl text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 transition-all duration-200 focus:ring-2 focus:ring-primary-500/20"
         autocomplete="off"
         id="unified-search"
-        aria-label="Search all messages"
+           aria-label="{{ _("Search all messages") }}"
       />
       <div class="absolute inset-y-0 right-0 pr-3 flex items-center gap-2">
         <template x-if="searchQuery">
-          <button @click="searchQuery = ''; filterMessages()" class="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded transition-colors" aria-label="Clear search">
+          <button @click="searchQuery = ''; filterMessages()" class="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded transition-colors" aria-label="{{ _("Clear search") }}">
             <i data-lucide="x" class="w-4 h-4 text-slate-500"></i>
           </button>
         </template>
@@ -67,7 +67,7 @@
             :class="filtersActive ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 border-primary-300 dark:border-primary-700' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-primary-300 dark:hover:border-primary-700'"
             class="px-4 py-2.5 border rounded-lg transition-all duration-200 flex items-center gap-2 font-medium shadow-sm hover:shadow-md">
       <i data-lucide="sliders-horizontal" class="w-4 h-4"></i>
-      <span class="hidden sm:inline">Filters</span>
+        <span class="hidden sm:inline">{{ _("Filters") }}</span>
       <template x-if="filtersActive">
         <span class="w-2 h-2 bg-primary-500 rounded-full animate-pulse"></span>
       </template>
@@ -78,13 +78,13 @@
       <button @click="switchToSplitView()"
               :class="viewMode === 'split' ? 'bg-white dark:bg-slate-800 shadow-sm' : 'hover:bg-slate-200 dark:hover:bg-slate-800'"
               class="p-2 rounded transition-colors"
-              aria-label="Split view (Gmail style)">
+                aria-label="{{ _("Split view (Gmail style)") }}">
         <i data-lucide="columns-2" class="w-4 h-4 text-slate-700 dark:text-slate-300"></i>
       </button>
       <button @click="viewMode = 'list'"
               :class="viewMode === 'list' ? 'bg-white dark:bg-slate-800 shadow-sm' : 'hover:bg-slate-200 dark:hover:bg-slate-800'"
               class="p-2 rounded transition-colors"
-              aria-label="List view only">
+                aria-label="{{ _("List view only") }}">
         <i data-lucide="list" class="w-4 h-4 text-slate-700 dark:text-slate-300"></i>
       </button>
     </div>
@@ -93,7 +93,7 @@
     <button @click="isFullscreen = !isFullscreen"
             :class="isFullscreen ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 border-primary-300 dark:border-primary-700' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-primary-300 dark:hover:border-primary-700'"
             class="px-4 py-2.5 border rounded-lg transition-all duration-200 flex items-center gap-2 font-medium shadow-sm hover:shadow-md"
-            :aria-label="isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'">
+            :aria-label="isFullscreen ? {{ _("Exit fullscreen") | tojson }} : {{ _("Enter fullscreen") | tojson }}">
       <i x-show="!isFullscreen" data-lucide="maximize-2" class="w-4 h-4"></i>
       <i x-show="isFullscreen" data-lucide="minimize-2" class="w-4 h-4"></i>
       <span class="hidden lg:inline" x-text="isFullscreen ? 'Exit' : 'Fullscreen'"></span>
@@ -104,11 +104,11 @@
       <button @click="fetchLatestMessages()"
               class="px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium flex items-center gap-2 transition-all duration-200 hover:border-primary-300 dark:hover:border-primary-700 hover:text-primary-700 dark:hover:text-primary-400"
               :aria-busy="isRefreshing"
-              aria-label="Refresh inbox">
+              aria-label="{{ _("Refresh inbox") }}">
         <i data-lucide="refresh-cw"
            class="w-4 h-4"
            :class="isRefreshing ? 'animate-spin text-primary-500' : 'text-slate-500 dark:text-slate-400'"></i>
-        <span class="hidden xl:inline">Refresh</span>
+        <span class="hidden xl:inline">{{ _("Refresh") }}</span>
       </button>
       <div class="flex flex-col">
         <span class="text-xs font-medium text-slate-500 dark:text-slate-400" x-text="lastRefreshLabel"></span>
@@ -121,8 +121,8 @@
                class="form-checkbox h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-primary-600 focus:ring-primary-500"
                x-model="autoRefreshEnabled"
                @change="handleAutoRefreshToggle()"
-               aria-label="Toggle automatic refresh" />
-        <span>Auto-refresh</span>
+               aria-label="{{ _("Toggle automatic refresh") }}" />
+        <span>{{ _("Auto-refresh") }}</span>
       </label>
     </div>
 
@@ -146,10 +146,10 @@
     <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
       <!-- Project Filter -->
       <div>
-        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Project</label>
+        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">{{ _("Project") }}</label>
         <select x-model="filters.project" @change="filterMessages()"
                 class="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent">
-          <option value="">All Projects</option>
+          <option value="">{{ _("All Projects") }}</option>
           <template x-for="proj in uniqueProjects" :key="proj">
             <option :value="proj" x-text="proj"></option>
           </template>
@@ -158,10 +158,10 @@
 
       <!-- Sender Filter -->
       <div>
-        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Sender</label>
+        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">{{ _("Sender") }}</label>
         <select x-model="filters.sender" @change="filterMessages()"
                 class="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent">
-          <option value="">All Senders</option>
+          <option value="">{{ _("All Senders") }}</option>
           <template x-for="sender in uniqueSenders" :key="sender">
             <option :value="sender" x-text="sender"></option>
           </template>
@@ -170,10 +170,10 @@
 
       <!-- Recipient Filter -->
       <div>
-        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Recipient</label>
+        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">{{ _("Recipient") }}</label>
         <select x-model="filters.recipient" @change="filterMessages()"
                 class="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent">
-          <option value="">All Recipients</option>
+          <option value="">{{ _("All Recipients") }}</option>
           <template x-for="recip in uniqueRecipients" :key="recip">
             <option :value="recip" x-text="recip"></option>
           </template>
@@ -182,25 +182,25 @@
 
       <!-- Importance Filter -->
       <div>
-        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Importance</label>
+        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">{{ _("Importance") }}</label>
         <select x-model="filters.importance" @change="filterMessages()"
                 class="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent">
-          <option value="">All</option>
-          <option value="urgent">Urgent</option>
-          <option value="high">High</option>
-          <option value="normal">Normal</option>
-          <option value="low">Low</option>
+          <option value="">{{ _("All") }}</option>
+          <option value="urgent">{{ _("Urgent") }}</option>
+          <option value="high">{{ _("High") }}</option>
+          <option value="normal">{{ _("Normal") }}</option>
+          <option value="low">{{ _("Low") }}</option>
         </select>
       </div>
 
       <!-- Thread Filter -->
       <div>
-        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Threads</label>
+        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">{{ _("Threads") }}</label>
         <select x-model="filters.hasThread" @change="filterMessages()"
                 class="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent">
-          <option value="">All Messages</option>
-          <option value="true">Threaded Only</option>
-          <option value="false">Non-threaded</option>
+          <option value="">{{ _("All Messages") }}</option>
+          <option value="true">{{ _("Threaded Only") }}</option>
+          <option value="false">{{ _("Non-threaded") }}</option>
         </select>
       </div>
 
@@ -209,7 +209,7 @@
         <button @click="clearFilters()"
                 class="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 font-medium rounded-lg transition-colors flex items-center justify-center gap-2">
           <i data-lucide="x-circle" class="w-4 h-4"></i>
-          Clear
+          {{ _("Clear") }}
         </button>
       </div>
     </div>
@@ -245,16 +245,16 @@
               <button @click="markSelectedAsRead()"
                       class="px-2 py-1 text-xs bg-success-100 dark:bg-success-900/30 hover:bg-success-200 dark:hover:bg-success-800/40 text-success-700 dark:text-success-300 rounded font-medium transition-colors flex items-center gap-1">
                 <i data-lucide="check" class="w-3 h-3"></i>
-                Mark Read
+          {{ _("Mark Read") }}
               </button>
               <button @click="deleteSelectedMessages()"
                       class="px-2 py-1 text-xs bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-800/40 text-red-700 dark:text-red-300 rounded font-medium transition-colors flex items-center gap-1">
                 <i data-lucide="trash-2" class="w-3 h-3"></i>
-                Delete
+          {{ _("Delete") }}
               </button>
               <button @click="selectedMessages = []"
                       class="px-2 py-1 text-xs bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded font-medium transition-colors">
-                Clear
+          {{ _("Clear") }}
               </button>
             </div>
           </template>
@@ -278,25 +278,25 @@
                     :class="sortBy === 'newest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                     class="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
               <i data-lucide="arrow-down" class="w-4 h-4"></i>
-              Newest First
+            {{ _("Newest First") }}
             </button>
             <button @click="sortBy = 'oldest'; filterMessages(); sortOpen = false"
                     :class="sortBy === 'oldest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                     class="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
               <i data-lucide="arrow-up" class="w-4 h-4"></i>
-              Oldest First
+            {{ _("Oldest First") }}
             </button>
             <button @click="sortBy = 'sender'; filterMessages(); sortOpen = false"
                     :class="sortBy === 'sender' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                     class="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
               <i data-lucide="user" class="w-4 h-4"></i>
-              By Sender
+            {{ _("By Sender") }}
             </button>
             <button @click="sortBy = 'longest'; filterMessages(); sortOpen = false"
                     :class="sortBy === 'longest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                     class="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
               <i data-lucide="file-text" class="w-4 h-4"></i>
-              Longest First
+            {{ _("Longest First") }}
             </button>
           </div>
         </div>
@@ -354,13 +354,13 @@
                       <template x-if="msg.importance === 'urgent'">
                         <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-danger-100 dark:bg-danger-900/30 text-danger-700 dark:text-danger-300 text-xs font-bold rounded-full">
                           <i data-lucide="alert-circle" class="w-3 h-3"></i>
-                          Urgent
+                {{ _("Urgent") }}
                         </span>
                       </template>
                       <template x-if="msg.importance === 'high'">
                         <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 text-xs font-semibold rounded-full">
                           <i data-lucide="alert-triangle" class="w-3 h-3"></i>
-                          High
+                {{ _("High") }}
                         </span>
                       </template>
 
@@ -368,7 +368,7 @@
                       <template x-if="msg.thread_id">
                         <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs font-medium rounded-full">
                           <i data-lucide="message-circle" class="w-3 h-3"></i>
-                          Thread
+                {{ _("Thread") }}
                         </span>
                       </template>
                     </div>
@@ -395,17 +395,17 @@
               <i data-lucide="inbox" class="w-10 h-10 text-slate-400 dark:text-slate-500"></i>
             </div>
             <h3 class="text-xl font-semibold text-slate-900 dark:text-white mb-2">
-              <span x-show="searchQuery || filtersActive">No matching messages</span>
-              <span x-show="!searchQuery && !filtersActive">Your unified inbox is empty</span>
+            <span x-show="searchQuery || filtersActive">{{ _("No matching messages") }}</span>
+            <span x-show="!searchQuery && !filtersActive">{{ _("Your unified inbox is empty") }}</span>
             </h3>
             <p class="text-sm text-slate-600 dark:text-slate-400 max-w-sm mb-4">
-              <span x-show="searchQuery || filtersActive">No messages match your current search query or filter criteria. Try broadening your search terms or clearing the active filters to see all messages.</span>
-              <span x-show="!searchQuery && !filtersActive">Messages from all your AI agents across all projects will appear here automatically when they're received. This unified view helps you stay on top of all agent communications in one place.</span>
+            <span x-show="searchQuery || filtersActive">{{ _("No messages match your current search query or filter criteria. Try broadening your search terms or clearing the active filters to see all messages.") }}</span>
+            <span x-show="!searchQuery && !filtersActive">{{ _("Messages from all your AI agents across all projects will appear here automatically when they're received. This unified view helps you stay on top of all agent communications in one place.") }}</span>
             </p>
             <button x-show="searchQuery || filtersActive"
                     @click="clearFilters(); searchQuery = ''; filterMessages()"
                     class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transition-all duration-300 btn-ripple">
-              Clear All Filters
+              {{ _("Clear All Filters") }}
             </button>
           </div>
         </template>
@@ -427,13 +427,13 @@
                 <template x-if="selectedMessage.importance === 'urgent'">
                   <span class="px-3 py-1.5 bg-danger-100 dark:bg-danger-900/30 text-danger-700 dark:text-danger-300 text-sm font-semibold rounded-full flex items-center gap-1.5 badge-pulse">
                     <i data-lucide="alert-circle" class="w-4 h-4"></i>
-                    Urgent
+                {{ _("Urgent") }}
                   </span>
                 </template>
                 <template x-if="selectedMessage.importance === 'high'">
                   <span class="px-3 py-1.5 bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 text-sm font-semibold rounded-full flex items-center gap-1.5">
                     <i data-lucide="alert-triangle" class="w-4 h-4"></i>
-                    High Priority
+                {{ _("High Priority") }}
                   </span>
                 </template>
               </div>
@@ -446,7 +446,7 @@
                     <i data-lucide="user" class="w-5 h-5 text-white"></i>
                   </div>
                   <div>
-                    <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">From</div>
+                    <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">{{ _("From") }}</div>
                     <div class="text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedMessage.sender"></div>
                   </div>
                 </div>
@@ -457,7 +457,7 @@
                     <i data-lucide="users" class="w-5 h-5 text-white"></i>
                   </div>
                   <div>
-                    <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">To</div>
+                    <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">{{ _("To") }}</div>
                     <div class="text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedMessage.recipients"></div>
                   </div>
                 </div>
@@ -468,7 +468,7 @@
                     <i data-lucide="folder" class="w-5 h-5 text-white"></i>
                   </div>
                   <div>
-                    <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">Project</div>
+                    <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">{{ _("Project") }}</div>
                     <a :href="`/mail/${selectedMessage.project_slug}`"
                        class="text-sm font-semibold text-primary-600 dark:text-primary-400 hover:underline"
                        x-text="selectedMessage.project_name"></a>
@@ -481,7 +481,7 @@
                     <i data-lucide="calendar" class="w-5 h-5 text-white"></i>
                   </div>
                   <div>
-                    <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">Sent</div>
+                    <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">{{ _("Sent") }}</div>
                     <div class="text-sm font-semibold text-slate-900 dark:text-white" x-text="selectedMessage.created_full"></div>
                   </div>
                 </div>
@@ -493,7 +493,7 @@
                       <i data-lucide="message-circle" class="w-5 h-5 text-white"></i>
                     </div>
                     <div>
-                      <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">Thread</div>
+                      <div class="text-xs text-slate-600 dark:text-slate-400 font-medium uppercase tracking-wide">{{ _("Thread") }}</div>
                       <div class="text-sm font-mono text-slate-900 dark:text-white" x-text="selectedMessage.thread_id"></div>
                     </div>
                   </div>
@@ -505,18 +505,18 @@
                 <button @click="copyMessageLink(selectedMessage)"
                         class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium">
                   <i data-lucide="link" class="w-4 h-4"></i>
-                  Copy Link
+                  {{ _("Copy Link") }}
                 </button>
                 <a :href="`/mail/${selectedMessage.project_slug}/message/${selectedMessage.id}`"
                    class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium">
                   <i data-lucide="external-link" class="w-4 h-4"></i>
-                  Open in Project
+                  {{ _("Open in Project") }}
                 </a>
                 <template x-if="selectedMessage.thread_id">
                   <a :href="`/mail/${selectedMessage.project_slug}/thread/${selectedMessage.thread_id}`"
                      class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium">
                     <i data-lucide="git-branch" class="w-4 h-4"></i>
-                    View Thread
+                    {{ _("View Thread") }}
                   </a>
                 </template>
               </div>
@@ -526,7 +526,7 @@
             <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-soft border border-slate-200 dark:border-slate-700 p-8">
               <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
                 <i data-lucide="file-text" class="w-5 h-5 text-primary-600 dark:text-primary-400"></i>
-                Message Content
+                {{ _("Message Content") }}
               </h3>
               <div class="prose prose-slate dark:prose-invert max-w-none">
                 <div :id="'message-body-' + selectedMessage.id" class="markdown-content"></div>
@@ -542,27 +542,27 @@
               <i data-lucide="mouse-pointer-click" class="w-12 h-12 text-slate-400 dark:text-slate-500"></i>
             </div>
             <h3 class="text-2xl font-semibold text-slate-900 dark:text-white mb-2">
-              Select a message to view
+              {{ _("Select a message to view") }}
             </h3>
             <p class="text-sm text-slate-600 dark:text-slate-400 max-w-md">
-              Choose a message from the list to see its full contents and details
+              {{ _("Choose a message from the list to see its full contents and details") }}
             </p>
             <div class="mt-8 grid grid-cols-2 gap-4 text-xs text-slate-600 dark:text-slate-400">
               <div class="flex items-center gap-2">
                 <kbd class="px-2 py-1 bg-slate-200 dark:bg-slate-700 rounded font-mono">j</kbd>
-                <span>Next message</span>
+                <span>{{ _("Next message") }}</span>
               </div>
               <div class="flex items-center gap-2">
                 <kbd class="px-2 py-1 bg-slate-200 dark:bg-slate-700 rounded font-mono">k</kbd>
-                <span>Previous message</span>
+                <span>{{ _("Previous message") }}</span>
               </div>
               <div class="flex items-center gap-2">
                 <kbd class="px-2 py-1 bg-slate-200 dark:bg-slate-700 rounded font-mono">/</kbd>
-                <span>Search</span>
+                <span>{{ _("Search") }}</span>
               </div>
               <div class="flex items-center gap-2">
                 <kbd class="px-2 py-1 bg-slate-200 dark:bg-slate-700 rounded font-mono">Esc</kbd>
-                <span>Deselect</span>
+                <span>{{ _("Deselect") }}</span>
               </div>
             </div>
           </div>
@@ -577,7 +577,7 @@
   <div class="border-t-2 border-slate-200 dark:border-slate-700 pt-8 mb-8">
     <div class="flex items-center justify-between mb-6">
       <div>
-        <h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-2">Your Projects</h2>
+        <h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-2">{{ _("Your Projects") }}</h2>
         <p class="text-slate-600 dark:text-slate-400">{{ projects|length }} project{{ 's' if projects|length != 1 else '' }} in total</p>
       </div>
 
@@ -587,9 +587,9 @@
         <input
           type="text"
           x-model="searchQuery"
-          placeholder="Filter projects..."
+          placeholder="{{ _("Filter projects...") }}"
           class="pl-10 pr-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-500 w-64"
-          aria-label="Filter projects"
+          aria-label="{{ _("Filter projects") }}"
         />
       </div>
       {% endif %}
@@ -611,7 +611,7 @@
             <i data-lucide="folder" class="w-6 h-6 text-white"></i>
           </div>
           <span class="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-medium rounded">
-            Active
+            {{ _("Active") }}
           </span>
         </div>
 
@@ -631,7 +631,7 @@
         </div>
 
         <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
-          <span class="text-xs text-slate-500">View details</span>
+          <span class="text-xs text-slate-500">{{ _("View details") }}</span>
           <i data-lucide="arrow-right" class="w-4 h-4 text-primary-600 dark:text-primary-400"></i>
         </div>
       </a>
@@ -660,7 +660,7 @@
               </div>
               <span class="px-2 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-xs font-medium rounded flex items-center gap-1">
                 <i data-lucide="archive" class="w-3 h-3"></i>
-                Archived
+                {{ _("Archived") }}
               </span>
             </div>
 
@@ -680,7 +680,7 @@
             </div>
 
             <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
-              <span class="text-xs text-slate-500">View details</span>
+              <span class="text-xs text-slate-500">{{ _("View details") }}</span>
               <i data-lucide="arrow-right" class="w-4 h-4 text-slate-400"></i>
             </div>
           </a>
@@ -695,10 +695,10 @@
          x-transition
          class="text-center py-12 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
       <i data-lucide="search-x" class="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3"></i>
-      <p class="text-slate-600 dark:text-slate-400 font-medium mb-1">No projects found</p>
-      <p class="text-sm text-slate-500 dark:text-slate-500 mb-3">No project names match your search query</p>
+      <p class="text-slate-600 dark:text-slate-400 font-medium mb-1">{{ _("No projects found") }}</p>
+      <p class="text-sm text-slate-500 dark:text-slate-500 mb-3">{{ _("No project names match your search query") }}</p>
       <button @click="searchQuery = ''" class="mt-2 text-primary-600 dark:text-primary-400 text-sm hover:underline">
-        Clear search
+        {{ _("Clear search") }}
       </button>
     </div>
 
@@ -707,8 +707,8 @@
       <div class="w-16 h-16 bg-slate-200 dark:bg-slate-700 rounded-full flex items-center justify-center mx-auto mb-4">
         <i data-lucide="folder-plus" class="w-8 h-8 text-slate-400"></i>
       </div>
-      <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-2">No Projects Yet</h3>
-      <p class="text-slate-600 dark:text-slate-400 mb-4">Create your first project to get started with agent collaboration</p>
+      <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-2">{{ _("No Projects Yet") }}</h3>
+      <p class="text-slate-600 dark:text-slate-400 mb-4">{{ _("Create your first project to get started with agent collaboration") }}</p>
     </div>
     {% endif %}
   </div>

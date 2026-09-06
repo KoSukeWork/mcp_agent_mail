@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}{{ agent }} — Inbox{% endblock %}
+{% block title %}{{ agent }} — {{ _("Inbox") }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="flex items-center gap-2 text-sm">
   <a href="/mail" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
-    Projects
+    {{ _("Projects") }}
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
   <a href="/mail/{{ project.slug }}" class="text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
     {{ project.human_key }}
   </a>
   <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i>
-  <span class="text-slate-900 dark:text-white font-medium">{{ agent }} Inbox</span>
+  <span class="text-slate-900 dark:text-white font-medium">{{ agent }} {{ _("Inbox") }}</span>
 </nav>
 {% endblock %}
 
@@ -31,13 +31,13 @@
             {{ agent }}
           </h1>
           <p class="text-slate-600 dark:text-slate-400">
-            Inbox
+            {{ _("Inbox") }}
             <template x-if="filteredItems.length > 0">
               <span>
                 <span class="text-slate-400 dark:text-slate-500">•</span>
                 <span class="font-medium" x-text="filteredItems.length + ' message' + (filteredItems.length !== 1 ? 's' : '')"></span>
                 <template x-if="unreadCount > 0">
-                  <span class="ml-2 px-2 py-0.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 text-xs font-bold rounded-full" x-text="unreadCount + ' unread'"></span>
+                    <span class="ml-2 px-2 py-0.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 text-xs font-bold rounded-full" x-text="unreadCount + ' {{ _("unread") }}'"></span>
                 </template>
               </span>
             </template>
@@ -49,10 +49,10 @@
       <div class="flex items-center gap-2">
         <button @click="refresh()"
                 class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-all duration-200 flex items-center gap-2 shadow-sm hover:shadow-md"
-                data-tippy-content="Refresh inbox"
-                aria-label="Refresh inbox">
+                data-tippy-content="{{ _("Refresh inbox") }}"
+                aria-label="{{ _("Refresh inbox") }}">
           <i data-lucide="refresh-cw" class="w-4 h-4" :class="{ 'animate-spin': isRefreshing }"></i>
-          <span class="hidden sm:inline">Refresh</span>
+          <span class="hidden sm:inline">{{ _("Refresh") }}</span>
         </button>
 
         <!-- Bulk Actions (shown when messages are selected) -->
@@ -64,22 +64,22 @@
           <span class="text-sm text-slate-600 dark:text-slate-400" x-text="selectedMessages.length + ' selected'"></span>
           <button @click="markSelectedAsRead()"
                   class="px-3 py-2 bg-green-100 dark:bg-green-900/30 hover:bg-green-200 dark:hover:bg-green-800/40 text-green-700 dark:text-green-300 rounded-lg transition-colors flex items-center gap-1.5 text-sm font-medium"
-                  data-tippy-content="Mark selected as read"
-                  aria-label="Mark selected messages as read">
+                  data-tippy-content="{{ _("Mark selected as read") }}"
+                  aria-label="{{ _("Mark selected messages as read") }}">
             <i data-lucide="check" class="w-4 h-4"></i>
-            <span class="hidden sm:inline">Mark Read</span>
+            <span class="hidden sm:inline">{{ _("Mark Read") }}</span>
           </button>
           <button @click="deleteSelectedMessages()"
                   class="px-3 py-2 bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-800/40 text-red-700 dark:text-red-300 rounded-lg transition-colors flex items-center gap-1.5 text-sm font-medium"
-                  data-tippy-content="Permanently delete selected messages"
-                  aria-label="Delete selected messages">
+                  data-tippy-content="{{ _("Permanently delete selected messages") }}"
+                  aria-label="{{ _("Delete selected messages") }}">
             <i data-lucide="trash-2" class="w-4 h-4"></i>
-            <span class="hidden sm:inline">Delete</span>
+            <span class="hidden sm:inline">{{ _("Delete") }}</span>
           </button>
           <button @click="clearSelection()"
                   class="px-3 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-colors flex items-center gap-1.5 text-sm"
-                  data-tippy-content="Clear selection"
-                  aria-label="Clear selection">
+                  data-tippy-content="{{ _("Clear selection") }}"
+                  aria-label="{{ _("Clear selection") }}">
             <i data-lucide="x" class="w-4 h-4"></i>
           </button>
         </div>
@@ -87,10 +87,10 @@
         <button @click="markAllAsRead()"
                 :disabled="isRefreshing"
                 class="px-4 py-2 bg-success-600 hover:bg-success-500 dark:bg-success-600 dark:hover:bg-success-500 text-white rounded-lg transition-all duration-200 flex items-center gap-2 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                data-tippy-content="Mark all messages as read"
-                aria-label="Mark All Read">
+                data-tippy-content="{{ _("Mark all messages as read") }}"
+                aria-label="{{ _("Mark All Read") }}">
           <i data-lucide="check-check" class="w-4 h-4" :class="{ 'animate-spin': isRefreshing }"></i>
-          <span class="hidden sm:inline">Mark All Read</span>
+          <span class="hidden sm:inline">{{ _("Mark All Read") }}</span>
         </button>
       </div>
     </div>
@@ -105,9 +105,9 @@
         <input x-model="searchQuery"
                @input="filterMessages()"
                type="text"
-               placeholder="Search messages..."
+               placeholder="{{ _("Search messages...") }}"
                class="w-full pl-11 pr-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-200 text-sm"
-               aria-label="Search messages" />
+               aria-label="{{ _("Search messages") }}" />
       </div>
 
       <!-- Filter Buttons -->
@@ -116,13 +116,13 @@
                 :class="activeFilter === 'all' ? 'bg-primary-600 text-white ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-slate-900' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'"
                 class="px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 shadow-sm">
           <i data-lucide="inbox" class="w-4 h-4"></i>
-          <span>All</span>
+          <span>{{ _("All") }}</span>
         </button>
         <button @click="activeFilter = 'unread'; filterMessages()"
                 :class="activeFilter === 'unread' ? 'bg-primary-600 text-white ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-slate-900' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'"
                 class="px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 shadow-sm">
           <i data-lucide="mail" class="w-4 h-4"></i>
-          <span>Unread</span>
+          <span>{{ _("Unread") }}</span>
           <template x-if="unreadCount > 0">
             <span class="px-1.5 py-0.5 bg-white/20 rounded-full text-xs font-bold" x-text="unreadCount"></span>
           </template>
@@ -131,7 +131,7 @@
                 :class="activeFilter === 'needs_ack' ? 'bg-warning-600 text-white ring-2 ring-warning-500 ring-offset-2 dark:ring-offset-slate-900' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'"
                 class="px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 shadow-sm">
           <i data-lucide="bell" class="w-4 h-4"></i>
-          <span>Needs ack</span>
+          <span>{{ _("Needs ack") }}</span>
           <template x-if="needsAckCount > 0">
             <span class="px-1.5 py-0.5 bg-white/20 rounded-full text-xs font-bold" x-text="needsAckCount"></span>
           </template>
@@ -140,7 +140,7 @@
                 :class="activeFilter === 'urgent' ? 'bg-danger-600 text-white ring-2 ring-danger-500 ring-offset-2 dark:ring-offset-slate-900' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'"
                 class="px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 shadow-sm">
           <i data-lucide="alert-circle" class="w-4 h-4"></i>
-          <span>Urgent</span>
+          <span>{{ _("Urgent") }}</span>
         </button>
 
         <!-- Sort Dropdown -->
@@ -148,7 +148,7 @@
           <button @click="open = !open"
                   class="px-4 py-2.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 shadow-sm border border-slate-300 dark:border-slate-600">
             <i data-lucide="arrow-up-down" class="w-4 h-4"></i>
-            <span>Sort</span>
+            <span>{{ _("Sort") }}</span>
             <i data-lucide="chevron-down" class="w-4 h-4 transition-transform" :class="{ 'rotate-180': open }"></i>
           </button>
 
@@ -162,19 +162,19 @@
                     :class="sortBy === 'newest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                     class="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
               <i data-lucide="arrow-down" class="w-4 h-4"></i>
-              Newest First
+              {{ _("Newest First") }}
             </button>
             <button @click="sortBy = 'oldest'; filterMessages(); open = false"
                     :class="sortBy === 'oldest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                     class="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
               <i data-lucide="arrow-up" class="w-4 h-4"></i>
-              Oldest First
+              {{ _("Oldest First") }}
             </button>
             <button @click="sortBy = 'sender'; filterMessages(); open = false"
                     :class="sortBy === 'sender' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                     class="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
               <i data-lucide="user" class="w-4 h-4"></i>
-              By Sender
+              {{ _("By Sender") }}
             </button>
           </div>
         </div>
@@ -197,7 +197,7 @@
                      @change="toggleSelection(item.id)"
                      :checked="selectedMessages.includes(item.id)"
                      class="w-5 h-5 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 rounded focus:ring-2 focus:ring-primary-500 transition-all duration-200 cursor-pointer"
-                     :aria-label="'Select message: ' + item.subject" />
+                     :aria-label="{{ _("Select message:") | tojson }} + ' ' + item.subject" />
             </div>
 
             <!-- Message Content (clickable) -->
@@ -225,7 +225,7 @@
                          @click.stop
                          class="flex items-center gap-1.5 px-2 py-1 bg-primary-100 dark:bg-primary-900/30 hover:bg-primary-200 dark:hover:bg-primary-800/40 text-primary-700 dark:text-primary-300 rounded-md transition-colors">
                         <i data-lucide="messages-square" class="w-3.5 h-3.5"></i>
-                        <span class="font-mono text-xs font-medium">Thread</span>
+                        <span class="font-mono text-xs font-medium">{{ _("Thread") }}</span>
                         <span class="font-mono text-xs opacity-75" x-text="'#' + item.thread_id"></span>
                       </a>
                     </template>
@@ -243,14 +243,14 @@
                   </template>
                   <template x-if="!item.unread && item.needs_ack">
                     <span class="px-2.5 py-1 bg-warning-100 dark:bg-warning-900/30 text-warning-700 dark:text-warning-300 text-xs font-semibold rounded-full flex items-center gap-1.5"
-                          data-tippy-content="ack_required is set on this message and you have not acknowledged it yet">
+                          data-tippy-content="{{ _("ack_required is set on this message and you have not acknowledged it yet") }}">
                       <i data-lucide="bell" class="w-3.5 h-3.5"></i>
                       Needs ack
                     </span>
                   </template>
                   <template x-if="item.acked">
                     <span class="px-2.5 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 text-xs font-medium rounded-full flex items-center gap-1.5"
-                          data-tippy-content="Acknowledged">
+                          data-tippy-content="{{ _("Acknowledged") }}">
                       <i data-lucide="check-circle-2" class="w-3.5 h-3.5"></i>
                       Acked
                     </span>
@@ -323,18 +323,18 @@
       </div>
       <h3 class="text-2xl font-semibold text-slate-900 dark:text-white mb-3">
         <template x-if="searchQuery || activeFilter !== 'all'">
-          <span>No matching messages</span>
+          <span>{{ _("No matching messages") }}</span>
         </template>
         <template x-if="!searchQuery && activeFilter === 'all'">
-          <span>Inbox is empty</span>
+          <span>{{ _("Inbox is empty") }}</span>
         </template>
       </h3>
       <p class="text-slate-600 dark:text-slate-400 mb-6 max-w-md mx-auto">
         <template x-if="searchQuery || activeFilter !== 'all'">
-          <span>No messages match your current search or filter criteria. Try broadening your search terms or clearing the active filters to see all messages.</span>
+          <span>{{ _("No messages match your current search or filter criteria. Try broadening your search terms or clearing the active filters to see all messages.") }}</span>
         </template>
         <template x-if="!searchQuery && activeFilter === 'all'">
-          <span>Messages sent to <strong class="text-slate-900 dark:text-white font-semibold">{{ agent }}</strong> will appear here automatically. Messages are typically delivered by other agents, external systems, or API integrations configured for this project.</span>
+          <span>{{ _("Messages sent to") }} <strong class="text-slate-900 dark:text-white font-semibold">{{ agent }}</strong> {{ _("will appear here automatically. Messages are typically delivered by other agents, external systems, or API integrations configured for this project.") }}</span>
         </template>
       </p>
       <template x-if="searchQuery || activeFilter !== 'all'">

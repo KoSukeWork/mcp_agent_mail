@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en" x-data="darkModeController()" x-init="init()"
+<html lang="{{ current_locale() }}" x-data="darkModeController()" x-init="init()"
       :class="{ 'dark': darkMode }" x-cloak>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}Agent Mail{% endblock %}</title>
+    <title>{% block title %}{{ _("Agent Mail") }}{% endblock %}</title>
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -961,7 +961,7 @@
 
   <body class="bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 text-slate-900 dark:text-slate-100 min-h-screen">
     <!-- Accessibility: Skip to main content -->
-    <a href="#main-content" class="skip-to-content">Skip to main content</a>
+    <a href="#main-content" class="skip-to-content">{{ _("Skip to main content") }}</a>
 
     <!-- Subtle particle background (optional, can be disabled) -->
     <div id="particles-background" style="display: none;"></div>
@@ -2185,7 +2185,15 @@
                     id="help-indicator"></span>
             </button>
 
-            <!-- Dark Mode Toggle -->
+          <!-- Interface Language Toggle -->
+          <button onclick="switchInterfaceLanguage('{{ 'en' if current_locale() == 'zh-CN' else 'zh-CN' }}')"
+                  class="h-9 min-w-9 px-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-sm font-semibold"
+                  data-tippy-content="{{ _("Interface language") }}"
+                  aria-label="{{ _("Switch to English") if current_locale() == 'zh-CN' else _("Switch to Simplified Chinese") }}">
+            {{ 'EN' if current_locale() == 'zh-CN' else '中' }}
+          </button>
+
+          <!-- Dark Mode Toggle -->
             <button @click="toggleDarkMode()"
                     class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                     data-tippy-content="Toggle dark/light mode"
@@ -2225,6 +2233,12 @@
 
     <!-- Alpine.js Components -->
     <script>
+      function switchInterfaceLanguage(locale) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('lang', locale);
+        window.location.assign(url.toString());
+      }
+
       function darkModeController() {
         return {
           darkMode: document.documentElement.classList.contains('dark'),
