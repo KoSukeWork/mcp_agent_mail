@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 import httpx
+import pytest
 from typer.testing import CliRunner
 
 from mcp_agent_mail.cli import app
@@ -343,7 +344,10 @@ def test_cli_products_link_resolves_relative_symlink_project_path(tmp_path: Path
     real_project_dir = tmp_path / "real-repo"
     real_project_dir.mkdir()
     symlink_project_dir = tmp_path / "repo-link"
-    symlink_project_dir.symlink_to(real_project_dir, target_is_directory=True)
+    try:
+        symlink_project_dir.symlink_to(real_project_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Directory symlinks are unavailable: {exc}")
     monkeypatch.chdir(tmp_path)
     _seed_product_with_relative_project(real_project_dir, human_key=symlink_project_dir)
 

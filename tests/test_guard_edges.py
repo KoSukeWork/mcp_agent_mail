@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from asyncio.subprocess import PIPE
 from pathlib import Path
 
@@ -47,9 +49,10 @@ async def test_guard_render_and_conflict_message(isolated_env, tmp_path: Path):
     hook_path = await install_guard(settings, "backend", repo_dir)
     assert hook_path.exists()
     # WORKTREES_ENABLED=1 is required for the guard to actually run (not exit early)
-    env = {"AGENT_NAME": "Blue", "WORKTREES_ENABLED": "1"}
+    env = {**os.environ, "AGENT_NAME": "Blue", "WORKTREES_ENABLED": "1"}
+    hook_command = [str(hook_path)] if os.name == "posix" else [sys.executable, str(hook_path)]
     proc_hook = await asyncio.create_subprocess_exec(
-        str(hook_path),
+        *hook_command,
         cwd=str(repo_dir),
         env=env,
         stdout=PIPE,

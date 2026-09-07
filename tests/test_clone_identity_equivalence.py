@@ -12,6 +12,7 @@ def _git(cwd: Path, *args: str) -> str:
 
 def test_clones_share_same_project_uid_via_remote(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("WORKTREES_ENABLED", "1")
+    monkeypatch.setenv("PROJECT_IDENTITY_MODE", "git-remote")
     get_settings.cache_clear()
     # Create bare remote
     remote = tmp_path / "remote.git"
@@ -21,6 +22,9 @@ def test_clones_share_same_project_uid_via_remote(tmp_path: Path, monkeypatch) -
     c2 = tmp_path / "clone2"
     _git(tmp_path, "clone", str(remote), str(c1))
     _git(tmp_path, "clone", str(remote), str(c2))
+    canonical_remote = "https://example.com/acme/mcp-agent-mail.git"
+    _git(c1, "remote", "set-url", "origin", canonical_remote)
+    _git(c2, "remote", "set-url", "origin", canonical_remote)
     id1 = _resolve_project_identity(str(c1))
     id2 = _resolve_project_identity(str(c2))
     assert id1["normalized_remote"] == id2["normalized_remote"]

@@ -21,6 +21,9 @@ from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import ensure_schema, get_session
 from mcp_agent_mail.storage import AsyncFileLock, _commit_lock_path
 
+pytestmark = pytest.mark.slow
+
+
 
 async def _setup_project_and_agents(settings: _config.Settings) -> dict:
     """Create test project and agents using MCP tools."""

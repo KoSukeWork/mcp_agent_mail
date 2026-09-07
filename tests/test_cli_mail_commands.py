@@ -17,6 +17,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from mcp_agent_mail.app import _compute_project_slug, _resolve_project_identity
@@ -201,7 +202,10 @@ def test_mail_status_preserves_symlink_project_identity(isolated_env, tmp_path, 
     real_dir = tmp_path / "real-repo"
     real_dir.mkdir()
     symlink_dir = tmp_path / "repo-link"
-    symlink_dir.symlink_to(real_dir, target_is_directory=True)
+    try:
+        symlink_dir.symlink_to(real_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Directory symlinks are unavailable: {exc}")
 
     result = runner.invoke(app, ["mail", "status", str(symlink_dir)])
 

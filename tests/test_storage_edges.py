@@ -13,6 +13,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fastmcp import Client
@@ -211,8 +212,8 @@ async def test_restore_from_backup_stages_bundle_inside_storage_root(isolated_en
     assert result["errors"] == []
     assert len(result["bundles_restored"]) == 1
 
-    archive = await ensure_archive(settings, "backend")
-    assert (archive.root / "messages").exists()
+    restored_project = Path(settings.storage.root).expanduser().resolve() / "projects" / "backend"
+    assert (restored_project / "messages").exists()
 
 
 @pytest.mark.asyncio
@@ -853,6 +854,10 @@ async def test_commit_queue_batch_ignores_cancelled_waiter(isolated_env, monkeyp
 # ============================================================================
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows does not permit unlinking an open file descriptor",
+)
 def test_cleanup_leaked_lockfile_fds_closes_deleted_lock_fd() -> None:
     """A still-open fd pointing at an unlinked ``.lock`` file must be closed.
 
@@ -903,6 +908,10 @@ def test_cleanup_leaked_lockfile_fds_skips_live_lock_fds(tmp_path: Path) -> None
             lock_path.unlink()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows does not permit unlinking an open file descriptor",
+)
 def test_cleanup_leaked_lockfile_fds_ignores_non_lock_deleted_fds() -> None:
     """A deleted-but-open fd that is NOT a ``.lock`` file must be left alone."""
     fd, path = tempfile.mkstemp(suffix=".txt")
@@ -1004,7 +1013,7 @@ async def test_archive_write_lock_releases_on_body_exception(tmp_path: Path, mon
         settings=get_settings(),
         slug="t",
         root=tmp_path,
-        repo=None,  # type: ignore[arg-type]
+        repo=cast(Any, None),
         lock_path=lock_path,
         repo_root=tmp_path,
     )
@@ -1110,6 +1119,7 @@ async def test_store_image_writes_sha256_path(isolated_env):
         )
 
         # rel_path must reference the SHA256 filename
+        assert rel_path is not None
         assert digest in rel_path, (
             f"rel_path {rel_path!r} must contain the SHA256 digest"
         )
@@ -1171,6 +1181,7 @@ async def test_legacy_sha1_blob_readable_alongside_sha256(isolated_env):
     try:
         meta, _rel_path = await _store_image(archive, blue_file, embed_policy="file")
         new_digest = meta["sha1"]
+        assert isinstance(new_digest, str)
 
         assert len(new_digest) == 64, "fresh write must use 64-char SHA256 digest"
 

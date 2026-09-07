@@ -63,17 +63,17 @@ async def test_sweep_retires_only_agents_past_threshold(isolated_env):
         async with get_session() as session:
             stale_agent = (
                 await session.execute(
-                    Agent.__table__.select().where(Agent.name == stale_name)
+                    sa_select(Agent).where(cast(Any, Agent.name) == stale_name)
                 )
-            ).first()
+            ).scalars().first()
             assert stale_agent is not None
             stale_id = stale_agent.id
             two_days_ago = _naive_utc(
                 datetime.now(timezone.utc) - timedelta(hours=48)
             )
             await session.execute(
-                Agent.__table__.update()
-                .where(Agent.id == stale_id)
+                sa_update(Agent)
+                .where(cast(Any, Agent.id) == stale_id)
                 .values(last_active_ts=two_days_ago, retired_at=None)
             )
             await session.commit()
@@ -85,14 +85,14 @@ async def test_sweep_retires_only_agents_past_threshold(isolated_env):
         async with get_session() as session:
             stale_after = (
                 await session.execute(
-                    Agent.__table__.select().where(Agent.name == stale_name)
+                    sa_select(Agent).where(cast(Any, Agent.name) == stale_name)
                 )
-            ).first()
+            ).scalars().first()
             active_after = (
                 await session.execute(
-                    Agent.__table__.select().where(Agent.name == active_name)
+                    sa_select(Agent).where(cast(Any, Agent.name) == active_name)
                 )
-            ).first()
+            ).scalars().first()
             assert stale_after is not None
             assert active_after is not None
             assert stale_after.retired_at is not None
@@ -118,21 +118,20 @@ async def test_sweep_is_idempotent(isolated_env):
         target_name = result.data["name"]
 
         async with get_session() as session:
-            target_id = (
-                (
-                    await session.execute(
-                        Agent.__table__.select().where(Agent.name == target_name)
-                    )
+            target_agent = (
+                await session.execute(
+                    sa_select(Agent).where(cast(Any, Agent.name) == target_name)
                 )
-                .first()
-                .id
-            )
+            ).scalars().first()
+            assert target_agent is not None
+            target_id = target_agent.id
+            assert target_id is not None
             two_days_ago = _naive_utc(
                 datetime.now(timezone.utc) - timedelta(hours=48)
             )
             await session.execute(
-                Agent.__table__.update()
-                .where(Agent.id == target_id)
+                sa_update(Agent)
+                .where(cast(Any, Agent.id) == target_id)
                 .values(last_active_ts=two_days_ago, retired_at=None)
             )
             await session.commit()

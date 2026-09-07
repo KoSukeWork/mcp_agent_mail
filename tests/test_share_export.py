@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import sqlite3
 import threading
@@ -991,6 +992,25 @@ def test_share_export_chunking_and_viewer_data(monkeypatch, tmp_path: Path) -> N
 def test_verify_viewer_vendor_assets():
     # Should not raise when bundled vendor assets match recorded checksums.
     share._verify_viewer_vendor_assets()
+
+
+def test_verify_viewer_vendor_assets_normalizes_windows_line_endings(tmp_path: Path) -> None:
+    vendor_root = tmp_path / "vendor"
+    vendor_root.mkdir()
+    canonical_data = b"window.vendor = true;\n"
+    (vendor_root / "vendor.js").write_bytes(canonical_data.replace(b"\n", b"\r\n"))
+    manifest = {
+        "vendor": {
+            "files": {
+                "vendor.js": {
+                    "sha256": hashlib.sha256(canonical_data).hexdigest(),
+                }
+            }
+        }
+    }
+    (tmp_path / "vendor_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    share._verify_viewer_vendor_assets(tmp_path)
 
 
 def test_maybe_chunk_database_rejects_zero_chunk_size(tmp_path: Path) -> None:

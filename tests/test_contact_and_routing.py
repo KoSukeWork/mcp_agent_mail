@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastmcp import Client
+from sqlmodel import col
 
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.config import clear_settings_cache, get_settings
@@ -268,7 +269,7 @@ async def test_cross_project_send_enforcement_disabled_still_honors_block_all(
             from sqlalchemy import select as _select
 
             agent = (
-                await s.execute(_select(Agent).where(Agent.name == "GoldHarbor"))
+                await s.execute(_select(Agent).where(col(Agent.name) == "GoldHarbor"))
             ).scalars().first()
             assert agent is not None
             agent.contact_policy = "block_all"

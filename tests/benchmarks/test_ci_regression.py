@@ -149,7 +149,7 @@ class TestQueryCountIntegration:
 
     @pytest.mark.asyncio
     @pytest.mark.ci_regression
-    async def test_send_message_query_count(self, isolated_env):
+    async def test_send_message_query_count(self, isolated_env, tmp_path):
         """Verify send_message stays within query count threshold."""
         from fastmcp import Client
 
@@ -160,7 +160,7 @@ class TestQueryCountIntegration:
         max_queries = 5  # From baselines.json
 
         async with Client(server) as client:
-            project_key = "/ci-query-test-send"
+            project_key = str(tmp_path / "ci-query-test-send")
             await client.call_tool("ensure_project", {"human_key": project_key})
 
             agent_result = await client.call_tool(
@@ -190,7 +190,7 @@ class TestQueryCountIntegration:
 
     @pytest.mark.asyncio
     @pytest.mark.ci_regression
-    async def test_fetch_inbox_query_count(self, isolated_env):
+    async def test_fetch_inbox_query_count(self, isolated_env, tmp_path):
         """Verify fetch_inbox stays within query count threshold."""
         from fastmcp import Client
 
@@ -201,7 +201,7 @@ class TestQueryCountIntegration:
         max_queries = 3  # From baselines.json
 
         async with Client(server) as client:
-            project_key = "/ci-query-test-inbox"
+            project_key = str(tmp_path / "ci-query-test-inbox")
             await client.call_tool("ensure_project", {"human_key": project_key})
 
             agent_result = await client.call_tool(
@@ -242,7 +242,7 @@ class TestQueryCountIntegration:
 
     @pytest.mark.asyncio
     @pytest.mark.ci_regression
-    async def test_list_outbox_query_count(self, isolated_env):
+    async def test_list_outbox_query_count(self, isolated_env, tmp_path):
         """Verify list_outbox stays within query count threshold."""
         from fastmcp import Client
 
@@ -253,7 +253,7 @@ class TestQueryCountIntegration:
         max_queries = 3  # From baselines.json
 
         async with Client(server) as client:
-            project_key = "/ci-query-test-outbox"
+            project_key = str(tmp_path / "ci-query-test-outbox")
             await client.call_tool("ensure_project", {"human_key": project_key})
 
             agent_result = await client.call_tool(

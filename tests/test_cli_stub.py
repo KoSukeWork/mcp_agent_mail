@@ -6,10 +6,17 @@ instead of using the MCP tools.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
+
+
+def _stub_command(script: Path, *args: str) -> list[str]:
+    """Run the POSIX installer stub through Git's shell on Windows."""
+    command = [str(script), *args]
+    return command if os.name == "posix" else ["sh", *command]
 
 
 @pytest.fixture
@@ -31,17 +38,18 @@ CORRECT USAGE:
      • mcp__mcp-agent-mail__fetch_inbox
 MSG
 exit 1
-'''
+    '''
     stub_path = tmp_path / "mcp-agent-mail"
-    stub_path.write_text(stub_content)
+    stub_path.write_text(stub_content, encoding="utf-8")
     stub_path.chmod(0o755)
     return stub_path
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX installer shell stub")
 def test_cli_stub_prints_not_cli_message(cli_stub_script: Path):
     """Test that the CLI stub prints a message explaining it's not a CLI tool."""
     result = subprocess.run(
-        [str(cli_stub_script)],
+        _stub_command(cli_stub_script),
         capture_output=True,
         text=True,
     )
@@ -55,10 +63,11 @@ def test_cli_stub_prints_not_cli_message(cli_stub_script: Path):
     assert "mcp__mcp-agent-mail__" in output
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX installer shell stub")
 def test_cli_stub_mentions_correct_tools(cli_stub_script: Path):
     """Test that the CLI stub mentions the correct MCP tool names."""
     result = subprocess.run(
-        [str(cli_stub_script)],
+        _stub_command(cli_stub_script),
         capture_output=True,
         text=True,
     )
@@ -71,6 +80,7 @@ def test_cli_stub_mentions_correct_tools(cli_stub_script: Path):
     assert "fetch_inbox" in output
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX installer shell stub")
 def test_cli_stub_ignores_arguments(cli_stub_script: Path):
     """Test that the CLI stub ignores any arguments passed to it."""
     # Try various argument patterns that a confused agent might try
@@ -83,7 +93,7 @@ def test_cli_stub_ignores_arguments(cli_stub_script: Path):
 
     for args in test_cases:
         result = subprocess.run(
-            [str(cli_stub_script), *args],
+            _stub_command(cli_stub_script, *args),
             capture_output=True,
             text=True,
         )
@@ -100,14 +110,14 @@ class TestInstallScriptCliStub:
     def test_install_function_exists(self):
         """Verify the install_cli_stub function exists in install.sh."""
         install_script = Path(__file__).parent.parent / "scripts" / "install.sh"
-        content = install_script.read_text()
+        content = install_script.read_text(encoding="utf-8")
 
         assert "install_cli_stub()" in content, "install_cli_stub function should exist"
 
     def test_install_creates_variants(self):
         """Verify install script creates variant symlinks."""
         install_script = Path(__file__).parent.parent / "scripts" / "install.sh"
-        content = install_script.read_text()
+        content = install_script.read_text(encoding="utf-8")
 
         # Should create symlinks for common variants
         expected_variants = ["mcp_agent_mail", "mcpagentmail", "agentmail", "agent-mail"]
@@ -117,6 +127,6 @@ class TestInstallScriptCliStub:
     def test_stub_mentions_github_repo(self):
         """Verify the stub script mentions the GitHub repo for documentation."""
         install_script = Path(__file__).parent.parent / "scripts" / "install.sh"
-        content = install_script.read_text()
+        content = install_script.read_text(encoding="utf-8")
 
         assert "github.com" in content.lower() and "mcp_agent_mail" in content

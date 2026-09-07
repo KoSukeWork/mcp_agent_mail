@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, AsyncContextManager, Callable, Optional, Protocol, cast
 from urllib.parse import parse_qsl
 import uuid
@@ -2110,6 +2110,18 @@ def _project_lookup_base_dir() -> Path:
 
 def _canonicalize_project_identifier(identifier: str) -> str:
     """Normalize path-like project identifiers without collapsing symlink identities."""
+
+    # Project keys are opaque identifiers that may use a different path syntax
+    # from the server. Detect those portable absolute forms before ``Path``:
+    # on Windows, ``Path('/project')`` is rooted and ``normpath`` would rewrite
+    # the stable POSIX key to ``\\project``.
+    posix_candidate = PurePosixPath(identifier)
+    if posix_candidate.is_absolute():
+        return posix_candidate.as_posix()
+    windows_candidate = PureWindowsPath(identifier)
+    if windows_candidate.is_absolute():
+        return str(windows_candidate)
+
     try:
         candidate = Path(identifier).expanduser()
     except Exception:
@@ -2146,6 +2158,11 @@ def _delete_project_archive_tree(storage_root: str, project_slug: str) -> tuple[
 
 
 _VALID_IDENTITY_MODES = ("dir", "git-remote", "git-common-dir", "git-toplevel")
+
+
+def _is_absolute_project_key(value: str) -> bool:
+    """Accept absolute opaque project keys from either supported path syntax."""
+    return PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
 
 
 def _resolve_project_identity(
@@ -2412,8 +2429,9 @@ def _resolve_project_identity(
 
 
 def _normalize_project_human_key(human_key: str) -> str:
-    # Collapse redundant separators and ".." segments without following symlinks.
-    return os.path.normpath(human_key)
+    # Normalize native paths while preserving absolute keys supplied in the
+    # path syntax of a client running on another operating system.
+    return _canonicalize_project_identifier(human_key)
 
 
 async def _ensure_project(human_key: str) -> Project:
@@ -5019,10 +5037,10 @@ async def _update_recipient_timestamp(
             .where(
                 MessageRecipient.message_id == message_id,
                 MessageRecipient.agent_id == agent.id,
-                cast(Any, field_col).is_(None),
+                field_col.is_(None),
             )
             .values({field: naive_now})
-            .returning(cast(Any, field_col))
+            .returning(field_col)
         )
         result = await session.execute(stmt)
         applied = result.first()
@@ -5157,7 +5175,7 @@ def build_mcp_server() -> FastMCP:
         # ctx refuses attribute assignment; multi-lookup consistency
         # degrades to "best effort" but a single lookup still works.
         with suppress(Exception):
-            ctx._mcp_agent_mail_orphan_key = orphan_key  # type: ignore[attr-defined]
+            cast(Any, ctx)._mcp_agent_mail_orphan_key = orphan_key
         return orphan_key
 
     def _prune_expired_session_bindings(now: float) -> None:
@@ -5958,7 +5976,7 @@ def build_mcp_server() -> FastMCP:
         """
         # Validate that human_key is an absolute path-like project key (cross-platform).
         # It need not exist on disk - it is an opaque project KEY, not a filesystem probe.
-        if not Path(human_key).is_absolute():
+        if not _is_absolute_project_key(human_key):
             raise ValueError(
                 f"human_key must be an absolute path-like project key, got: '{human_key}'. "
                 "Use the agent's working directory path (e.g., '/data/projects/backend' on Unix "
@@ -9801,6 +9819,12 @@ def build_mcp_server() -> FastMCP:
                 # The JOIN on MessageRecipient already restricts to messages
                 # where the viewer has a recipient row, so no additional
                 # _message_visible_to_agent_clause is needed here.
+                if viewer is None or viewer.id is None:
+                    raise ToolExecutionError(
+                        "INVALID_AGENT",
+                        "A registered agent is required when unread_only is true.",
+                        recoverable=True,
+                    )
                 viewer_recipient = aliased(MessageRecipient)
                 stmt = (
                     stmt.join(
@@ -9808,7 +9832,7 @@ def build_mcp_server() -> FastMCP:
                         cast(Any, viewer_recipient.message_id) == Message.id,
                     )
                     .where(
-                        cast(Any, viewer_recipient.agent_id) == (viewer.id or 0),  # type: ignore[union-attr]
+                        cast(Any, viewer_recipient.agent_id) == viewer.id,
                         cast(Any, viewer_recipient.read_ts).is_(None),
                     )
                 )

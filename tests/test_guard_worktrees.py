@@ -814,7 +814,7 @@ async def test_chain_runner_executes_plugins(isolated_env, tmp_path: Path):
     plugin.write_text(
         f"#!/usr/bin/env python3\n"
         f"from pathlib import Path\n"
-        f"Path('{marker_file}').write_text('ran')\n",
+        f"Path({str(marker_file)!r}).write_text('ran')\n",
         encoding="utf-8",
     )
     plugin.chmod(0o755)
@@ -959,6 +959,7 @@ def test_chain_runner_windows_resolves_bundled_git_sh(tmp_path: Path, monkeypatc
     assert orig_calls[0][0] == str(bundled_sh)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX executable-bit dispatch")
 def test_chain_runner_posix_dispatch_unchanged(tmp_path: Path, monkeypatch):
     """On POSIX the runner still execs children bare (kernel honors shebangs)."""
     import sys as _sys
@@ -976,7 +977,7 @@ def test_chain_runner_posix_dispatch_unchanged(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", recorder)
     monkeypatch.setattr(_sys, "argv", [str(hook_path)])
 
-    _exec_chain_runner(hook_path, _render_chain_runner_script("pre-commit"))
+    _exec_chain_runner(hook_path, _render_chain_runner_script("pre-commit"), os_name="posix")
 
     orig_calls = [c for c in recorder.calls if c[-1].endswith("pre-commit.orig")]
     assert orig_calls == [[str(orig)]]

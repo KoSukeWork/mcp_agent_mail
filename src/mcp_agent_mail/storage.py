@@ -19,6 +19,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -36,7 +37,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, AsyncIterator, Iterable, Sequence, TypeVar, cast
 
 from filelock import SoftFileLock, Timeout
-from git import Actor, Repo
+from git import Actor, Git, Repo
 from git.objects.tree import Tree
 from PIL import Image
 
@@ -730,8 +731,12 @@ def get_fd_usage() -> tuple[int, int]:
     On platforms where this isn't available, returns (-1, -1).
     """
     try:
-        import resource
-        soft_limit, _hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource_module = importlib.import_module("resource")
+        getrlimit = getattr(resource_module, "getrlimit", None)
+        rlimit_nofile = getattr(resource_module, "RLIMIT_NOFILE", None)
+        if not callable(getrlimit) or not isinstance(rlimit_nofile, int):
+            return (-1, -1)
+        soft_limit, _hard_limit = getrlimit(rlimit_nofile)
         # Count open file descriptors by checking /proc/self/fd (Linux) or /dev/fd (macOS)
         fd_dir = Path("/dev/fd") if sys.platform == "darwin" else Path("/proc/self/fd")
         if fd_dir.exists():
@@ -1315,10 +1320,17 @@ def _restore_bundle_into_archive(bundle_to_restore: Path, target_root: Path) -> 
         backup_archive = target_root.with_suffix(".pre-restore")
         if backup_archive.exists():
             shutil.rmtree(backup_archive)
-        shutil.copytree(target_root, backup_archive)
-        shutil.rmtree(target_root)
+        # Rename the complete tree atomically instead of copying and deleting
+        # individual Git objects. Windows may keep pack/object handles open
+        # briefly even after Repo.close(), but moving the parent directory is
+        # safe and does not require unlinking those files one by one.
+        target_root.replace(backup_archive)
 
-    Repo.clone_from(str(source_bundle), str(target_root))
+    git = Git()
+    try:
+        git.clone(str(source_bundle), str(target_root))
+    finally:
+        git.clear_cache()
 
 
 def _ensure_str(value: str | bytes) -> str:
@@ -2143,7 +2155,10 @@ async def _commit_direct(
     attempt_repo = repo  # May diverge from `repo` during EMFILE recovery
 
     def _perform_commit(target_repo: Repo) -> None:
-        target_repo.index.add(rel_paths)
+        # Route staging through ``git add`` so .gitattributes clean filters are
+        # honored. ``IndexFile.add`` writes working-tree bytes directly and can
+        # leave every text file dirty on Windows when the archive enforces LF.
+        target_repo.git.add("--", *rel_paths)
         if target_repo.is_dirty(index=True, working_tree=True):
             # Append commit trailers with Agent and optional Thread if present in message text
             trailers: list[str] = []
@@ -2801,7 +2816,9 @@ async def get_file_content(
             try:
                 return str(stream.read().decode("utf-8", errors="replace"))
             finally:
-                stream.close()
+                close_stream = getattr(stream, "close", None)
+                if callable(close_stream):
+                    close_stream()
         except KeyError:
             return None
 

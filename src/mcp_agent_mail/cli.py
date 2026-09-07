@@ -4639,7 +4639,7 @@ def projects_adopt(
                         *remove_relpaths,
                     )
                 if add_relpaths:
-                    await asyncio.to_thread(dst_archive.repo.index.add, list(add_relpaths))
+                    await asyncio.to_thread(dst_archive.repo.git.add, "--", *add_relpaths)
                 if await asyncio.to_thread(dst_archive.repo.is_dirty, index=True, working_tree=True):
                     await asyncio.to_thread(
                         dst_archive.repo.index.commit,

@@ -58,6 +58,9 @@ async def test_http_bearer_and_cors_preflight(isolated_env, monkeypatch):
 @pytest.mark.asyncio
 async def test_http_jwks_validation_and_resource_rate_limit(isolated_env, monkeypatch):
     # Configure JWT with JWKS and strict resource rate limit
+    from mcp_agent_mail import http as http_module
+
+    http_module._jwks_cache.clear()
     monkeypatch.setenv("HTTP_JWT_ENABLED", "true")
     monkeypatch.setenv("HTTP_JWT_ALGORITHMS", "RS256")
     monkeypatch.setenv("HTTP_RBAC_ENABLED", "true")

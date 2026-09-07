@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
@@ -15,6 +16,7 @@ def _fake_completed(stdout: str, stderr: str = "", returncode: int = 0) -> subpr
     return subprocess.CompletedProcess(args=["tru", "--encode"], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="E2E fixture uses a stable POSIX project identity")
 @pytest.mark.asyncio
 async def test_toon_format_e2e_flow(isolated_env, monkeypatch):
     monkeypatch.setattr(app_module, "_looks_like_toon_rust_encoder", lambda _exe: True)

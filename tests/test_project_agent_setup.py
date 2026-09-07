@@ -176,7 +176,10 @@ async def test_ensure_project_resolves_symlinks(isolated_env, tmp_path):
     real_dir = tmp_path / "real_project"
     real_dir.mkdir()
     symlink_dir = tmp_path / "symlink_project"
-    symlink_dir.symlink_to(real_dir)
+    try:
+        symlink_dir.symlink_to(real_dir)
+    except OSError as exc:
+        pytest.skip(f"Directory symlinks are unavailable: {exc}")
 
     real_path = str(real_dir.resolve())
     symlink_path = str(symlink_dir)

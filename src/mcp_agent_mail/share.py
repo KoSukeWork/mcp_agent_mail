@@ -1889,6 +1889,12 @@ def _verify_viewer_vendor_assets(base: Any | None = None) -> None:
                     "Viewer vendor asset "
                     f"'{filename}' missing. Run scripts/update_sqlite_vendor.py to refresh assets."
                 ) from exc
+            # Git may materialize text assets with CRLF on Windows even though
+            # the recorded vendor checksum was generated from the upstream LF
+            # payload. Verify canonical text bytes while keeping binary assets
+            # byte-for-byte strict.
+            if asset_path.suffix in {".css", ".js"}:
+                data = data.replace(b"\r\n", b"\n")
             digest = hashlib.sha256(data).hexdigest()
             if digest != expected:
                 raise ShareExportError(

@@ -34,6 +34,8 @@ from mcp_agent_mail import app as app_module, config as _config
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import ensure_schema, get_session
 
+pytestmark = pytest.mark.slow
+
 # ============================================================================
 # Helper functions
 # ============================================================================
@@ -954,7 +956,7 @@ class TestRaceConditions:
 
     @pytest.mark.asyncio
     async def test_simultaneous_agent_registration_same_name(self, isolated_env):
-        """Multiple clients try to register the same agent name - idempotent."""
+        """Only the creator may register a newly token-protected identity."""
         await ensure_schema()
         project_key = f"/test/concurrent/agent-register/{random_id()}"
         num_attempts = 10
@@ -982,10 +984,12 @@ class TestRaceConditions:
             return_exceptions=True,
         )
 
-        for i, r in enumerate(results):
-            assert not isinstance(r, Exception), f"Attempt {i} failed: {r}"
+        successes = [result for result in results if isinstance(result, dict)]
+        failures = [result for result in results if isinstance(result, Exception)]
+        assert successes, "At least the identity-creating registration must succeed"
+        assert all("registration token" in str(error) for error in failures)
 
-        agent_ids = [r["id"] for r in results if isinstance(r, dict)]
+        agent_ids = [result["id"] for result in successes]
         assert len(set(agent_ids)) == 1, "All should get the same agent ID"
 
     @pytest.mark.asyncio

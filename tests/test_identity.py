@@ -1,5 +1,8 @@
 import asyncio
+import os
 from pathlib import Path
+
+import pytest
 
 from mcp_agent_mail.app import _build_project_profile, _compute_project_slug, _resolve_project_identity
 from mcp_agent_mail.config import get_settings
@@ -46,7 +49,10 @@ def test_identity_dir_mode_preserves_symlink_project_path(tmp_path: Path, monkey
     real_target = tmp_path / "real"
     real_target.mkdir()
     symlink_target = tmp_path / "repo-link"
-    symlink_target.symlink_to(real_target, target_is_directory=True)
+    try:
+        symlink_target.symlink_to(real_target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Directory symlinks are unavailable: {exc}")
 
     real_identity = _resolve_project_identity(str(real_target))
     symlink_identity = _resolve_project_identity(str(symlink_target))
@@ -59,6 +65,10 @@ def test_identity_dir_mode_preserves_symlink_project_path(tmp_path: Path, monkey
     assert symlink_identity["project_uid"] != real_identity["project_uid"]
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Case-insensitive Windows filesystems cannot create README.md/readme.md aliases",
+)
 def test_build_project_profile_dedupes_same_file_aliases(tmp_path: Path) -> None:
     readme = tmp_path / "README.md"
     readme.write_text("# Project Profile\n", encoding="utf-8")

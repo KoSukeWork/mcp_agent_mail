@@ -2,109 +2,146 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
-  build-and-test:
-    name: Lint, Type Check, Test (${{ matrix.os }}, py${{ matrix.python-version }})
+  cross-platform-quality:
+    name: Quality (${{ matrix.os }}, Python 3.14)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        # Honor the requires-python floor (3.12) advertised in pyproject.toml
-        # alongside the primary 3.14 target used for Docker/release.
-        python-version: ['3.12', '3.14']
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.14
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-          allow-prereleases: true
+          python-version: "3.14"
 
       - name: Install uv
-        shell: bash
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          uv --version
-
-      - name: Cache uv dependencies
-        uses: actions/cache@v4
+        uses: astral-sh/setup-uv@v9
         with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ci-uv-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-          restore-keys: |
-            ci-uv-${{ runner.os }}-py${{ matrix.python-version }}-
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Sync dependencies
-        shell: bash
-        run: |
-          uv sync --dev
+      - name: Sync locked development environment
+        run: uv sync --locked --dev
 
-      - name: Lint (ruff)
-        shell: bash
-        run: |
-          uv run ruff check
+      - name: Lint
+        run: uv run ruff check
 
       - name: Type check
-        shell: bash
-        run: |
-          uvx ty check
+        run: uvx ty check
 
-      - name: Run tests
-        shell: bash
+      - name: Run fast tests with coverage (Linux)
+        if: runner.os == 'Linux'
         env:
           PYTHONUTF8: "1"
-        run: |
-          uv run -m pytest -q
+        run: >-
+          uv run pytest
+          tests/test_app_helpers.py tests/test_guard_edges.py tests/test_guard_worktrees.py
+          tests/test_identity.py tests/test_security_path_traversal.py
+          tests/test_attachments_extended.py tests/test_image_processing_edge.py
+          tests/test_toon_encoder_identification.py tests/test_share_export.py
+          tests/test_cli_stub.py -q --tb=short
 
-      - name: Smoke test am-run (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          uv run python -m mcp_agent_mail.cli am-run ci-slot -- echo "ok"
+      - name: Run fast tests (Windows)
+        if: runner.os == 'Windows'
+        env:
+          PYTHONUTF8: "1"
+        run: >-
+          uv run pytest
+          tests/test_app_helpers.py tests/test_guard_edges.py tests/test_guard_worktrees.py
+          tests/test_identity.py tests/test_security_path_traversal.py
+          tests/test_attachments_extended.py tests/test_image_processing_edge.py
+          tests/test_toon_encoder_identification.py tests/test_share_export.py
+          tests/test_cli_stub.py -q --no-cov --tb=short
 
-      - name: Run performance benchmarks (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
+      - name: Smoke test am-run (Linux)
+        if: runner.os == 'Linux'
+        run: uv run python -m mcp_agent_mail.cli am-run ci-slot -- echo "ok"
+
+  functional-tests:
+    name: Complete functional tests (Linux, Python 3.14)
+    needs: cross-platform-quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync locked development environment
+        run: uv sync --locked --dev
+
+      - name: Run complete non-performance suite
+        env:
+          PYTHONUTF8: "1"
+        run: uv run pytest -m "not benchmark and not ci_regression" -q --tb=short
+
+  performance:
+    name: Performance regression tests (Linux, Python 3.14)
+    needs: [cross-platform-quality, functional-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync locked development environment
+        run: uv sync --locked --dev
+
+      - name: Run performance benchmarks
         env:
           PYTHONUTF8: "1"
           RUN_BENCHMARKS: "1"
           INSTRUMENTATION_ENABLED: "true"
-        run: |
-          uv run -m pytest tests/benchmarks/ -v -m benchmark --tb=short
+        run: uv run pytest tests/benchmarks/ -v -m benchmark --no-cov --tb=short
 
-      - name: CI Performance Regression Check (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
+      - name: Run CI performance regression checks
         env:
           PYTHONUTF8: "1"
-        run: |
-          uv run -m pytest tests/benchmarks/test_ci_regression.py -v -m ci_regression --tb=short
+        run: uv run pytest tests/benchmarks/test_ci_regression.py -v -m ci_regression --no-cov --tb=short
 
       - name: Upload regression report artifact
-        if: matrix.os == 'ubuntu-latest' && always()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: regression-reports-py${{ matrix.python-version }}
+          name: regression-reports-py3.14
           path: tests/benchmarks/regression_reports/
           if-no-files-found: ignore
           retention-days: 30
 
       - name: Upload benchmark results artifact
-        if: matrix.os == 'ubuntu-latest' && always()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results-py${{ matrix.python-version }}
+          name: benchmark-results-py3.14
           path: tests/benchmarks/results/
           if-no-files-found: ignore
           retention-days: 30

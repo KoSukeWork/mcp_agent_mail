@@ -2,6 +2,7 @@ import asyncio
 import json
 from typing import Any
 
+import pytest
 from fastmcp import Client
 
 from mcp_agent_mail.app import build_mcp_server
@@ -75,7 +76,10 @@ def test_products_link_resolves_relative_symlink_project_path(tmp_path, monkeypa
     real_project_dir = tmp_path / "real-repo"
     real_project_dir.mkdir()
     symlink_project_dir = tmp_path / "repo-link"
-    symlink_project_dir.symlink_to(real_project_dir, target_is_directory=True)
+    try:
+        symlink_project_dir.symlink_to(real_project_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Directory symlinks are unavailable: {exc}")
     monkeypatch.chdir(tmp_path)
 
     unique = "_prod_" + hex(hash(str(tmp_path)) & 0xFFFFF)[2:]

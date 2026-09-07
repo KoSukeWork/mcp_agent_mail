@@ -91,7 +91,7 @@ class TestStartupBannerDatabaseReset:
         monkeypatch.setattr(uvicorn_module, "run", mock_uvicorn_run)
 
         # Run serve_http
-        serve_http()
+        serve_http(host=None, port=None, path=None)
 
         # Verify the sequence
         assert banner_displayed, "Banner should be displayed"

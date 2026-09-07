@@ -263,6 +263,7 @@ def _touch_bundle_files(bundle_root: Path, base: float) -> None:
         os.utime(path, (ts, ts))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Golden snapshot currently records POSIX project paths and separators")
 @pytest.mark.asyncio
 async def test_isomorphism_e2e_suite(isolated_env, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("WORKTREES_ENABLED", "1")

@@ -10,7 +10,9 @@ from fastmcp import Client, Context
 
 from mcp_agent_mail.app import (
     ToolExecutionError,
+    _canonicalize_project_identifier,
     _enforce_capabilities,
+    _is_absolute_project_key,
     _iso,
     _latest_filesystem_activity,
     _latest_git_activity,
@@ -19,6 +21,25 @@ from mcp_agent_mail.app import (
     _reservation_repo_pathspec,
     build_mcp_server,
 )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("/srv/projects/backend", True),
+        (r"C:\projects\backend", True),
+        (r"\\server\share\backend", True),
+        ("./backend", False),
+        ("backend", False),
+    ],
+)
+def test_is_absolute_project_key_accepts_posix_and_windows_syntax(value: str, expected: bool) -> None:
+    assert _is_absolute_project_key(value) is expected
+
+
+def test_canonicalize_project_identifier_preserves_foreign_absolute_syntax() -> None:
+    assert _canonicalize_project_identifier("/srv/projects/backend") == "/srv/projects/backend"
+    assert _canonicalize_project_identifier(r"C:\projects\backend") == r"C:\projects\backend"
 
 
 def test_iso_and_parse_helpers():
@@ -90,6 +111,7 @@ def test_latest_filesystem_activity_early_exits_on_recent(tmp_path) -> None:
     latest = _latest_filesystem_activity(
         [first_recent, second_more_recent], recent_after=recent_after
     )
+    assert latest is not None
 
     # Returned the first (recent) mtime, NOT the larger second one -> stopped early.
     assert latest == datetime.fromtimestamp(first_ts, tz=timezone.utc)

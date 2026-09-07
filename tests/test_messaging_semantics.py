@@ -1209,10 +1209,9 @@ async def test_search_and_summarize_thread_respect_recipient_visibility(isolated
 async def test_send_message_rolls_back_db_row_when_archive_write_fails(isolated_env, monkeypatch):
     """#180: a failed archive write after the message row is committed must roll
     the row (and its recipients) back, not orphan a committed DB row."""
-    import mcp_agent_mail.app as app_module
-    from sqlalchemy import func
-    from sqlalchemy import select as sa_select
+    from sqlalchemy import func, select as sa_select
 
+    import mcp_agent_mail.app as app_module
     from mcp_agent_mail.models import Message, MessageRecipient
 
     server = build_mcp_server()

@@ -38,7 +38,7 @@ jobs:
             release-uv-${{ runner.os }}-
 
       - name: Sync dependencies (dev)
-        run: uv sync --dev
+        run: uv sync --locked --dev
 
       - name: Ruff Lint
         run: uv run ruff check --output-format=github

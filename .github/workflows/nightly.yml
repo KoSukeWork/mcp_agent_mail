@@ -30,7 +30,7 @@ jobs:
           restore-keys: |
             nightly-uv-${{ runner.os }}-
       - name: Sync dependencies (dev)
-        run: uv sync --dev
+        run: uv sync --locked --dev
       - name: Run migrations
         run: uv run python -m mcp_agent_mail.cli migrate
       - name: List projects

@@ -98,6 +98,8 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HTTP_PORT", "8765")
     monkeypatch.setenv("HTTP_PATH", "/mcp/")
     monkeypatch.setenv("APP_ENVIRONMENT", "test")
+    monkeypatch.setenv("TOOLS_LOG_ENABLED", "false")
+    monkeypatch.setenv("LOG_RICH_ENABLED", "false")
     storage_root = tmp_path / "storage"
     monkeypatch.setenv("STORAGE_ROOT", str(storage_root))
     monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
@@ -147,19 +149,11 @@ def isolated_env(tmp_path, monkeypatch):
             gc.collect()
 
         clear_settings_cache()
-
-        if db_path.exists():
-            db_path.unlink()
-        storage_root = tmp_path / "storage"
-        if storage_root.exists():
-            for path in storage_root.rglob("*"):
-                if path.is_file():
-                    path.unlink()
-            for path in sorted(storage_root.rglob("*"), reverse=True):
-                if path.is_dir():
-                    path.rmdir()
-            if storage_root.exists():
-                storage_root.rmdir()
+        # ``tmp_path`` owns filesystem cleanup. Do not eagerly unlink its
+        # contents while the completed test frame can still retain GitPython
+        # pack-file objects; Windows correctly refuses to remove those open
+        # files. Pytest removes its numbered base directories after the test
+        # process has released all handles.
 
 
 @pytest.fixture(autouse=True)

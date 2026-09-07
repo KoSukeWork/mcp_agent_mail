@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import shutil
 import stat
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -44,30 +45,41 @@ def _make_fake_binary(tmp_path: Path, name: str, help_text: str, version_text: s
     return str(script)
 
 
-def test_binary_named_toon_is_accepted_when_banners_identify_toon_rust(tmp_path: Path) -> None:
+def _mock_binary_banners(monkeypatch, *, help_text: str, version_text: str = "") -> None:
+    """Provide platform-independent encoder probe responses."""
+
+    def fake_run(argv, **_kwargs):
+        output = help_text if argv[-1] == "--help" else version_text
+        return subprocess.CompletedProcess(argv, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    app_module._looks_like_toon_rust_encoder.cache_clear()
+
+
+def test_binary_named_toon_is_accepted_when_banners_identify_toon_rust(
+    monkeypatch,
+) -> None:
     """
     `cargo install tru` produces a binary named `toon` (the [[bin]] target's
     name in toon_rust's Cargo.toml). mcp_agent_mail#163: a basename-only
     rejection broke every local install. The post-fix function must
     identify the binary via its help-text banner regardless of basename.
     """
-    exe = _make_fake_binary(
-        tmp_path,
-        name="toon",
+    _mock_binary_banners(
+        monkeypatch,
         help_text="TOON reference implementation in Rust (JSON <-> TOON)\nusage: toon ...",
     )
-    assert app_module._looks_like_toon_rust_encoder(exe) is True
+    assert app_module._looks_like_toon_rust_encoder("toon") is True
 
 
-def test_binary_named_tru_is_accepted_via_version_banner(tmp_path: Path) -> None:
+def test_binary_named_tru_is_accepted_via_version_banner(monkeypatch) -> None:
     """A binary named `tru` that prints the toon_rust version banner is accepted."""
-    exe = _make_fake_binary(
-        tmp_path,
-        name="tru",
+    _mock_binary_banners(
+        monkeypatch,
         help_text="usage: tru\n",
         version_text="tru 0.2.3",
     )
-    assert app_module._looks_like_toon_rust_encoder(exe) is True
+    assert app_module._looks_like_toon_rust_encoder("tru") is True
 
 
 def test_node_js_toon_is_still_rejected(tmp_path: Path) -> None:

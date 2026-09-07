@@ -87,9 +87,9 @@ async def test_messaging_flow(isolated_env):
         assert profile.exists()
         message_file = next(iter((storage_root / "projects" / "backend" / "messages").rglob("*.md")))
         assert "Test" in message_file.read_text()
-        repo = Repo(str(storage_root))
-        # Commit message is a rich panel; ensure the subject is captured
-        assert '"subject": "Test"' in str(repo.head.commit.message)
+        with Repo(str(storage_root)) as repo:
+            commit_message = str(repo.head.commit.message)
+        assert "mail: BlueLake -> BlueLake | Test" in commit_message
 
 
 @pytest.mark.asyncio
