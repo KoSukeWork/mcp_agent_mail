@@ -22,6 +22,44 @@ from mcp_agent_mail.localization import (
 )
 
 
+@pytest.mark.parametrize("locale", ["zh-CN", "en"])
+def test_project_header_preserves_long_path_and_layout_regions(locale):
+    path = "C:\\Users\\admin\\AppData\\Local\\Temp\\" + "long-project-path\\" * 12 + "team's & work"
+    env = Environment(
+        loader=FileSystemLoader(Path(__file__).parents[1] / "src/mcp_agent_mail/templates"),
+        autoescape=True, undefined=StrictUndefined,
+    )
+    token = set_interface_locale(locale)
+    try:
+        html = env.get_template("mail_project.html").render(
+            _=gettext, current_locale=get_interface_locale,
+            project={"id": 1, "slug": "long-project", "human_key": path,
+                     "created_at": "2026-09-08", "archived_at": None},
+            agents=[], results=[], q="", scope="", order="", boost="",
+        )
+    finally:
+        reset_interface_locale(token)
+
+    class HeaderParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.attributes: list[dict[str, str | None]] = []
+
+        def handle_starttag(self, tag, attrs):
+            self.attributes.append(dict(attrs))
+
+    parser = HeaderParser()
+    parser.feed(html)
+    for region in ("app-header-layout", "app-header-leading", "app-header-brand",
+                   "app-header-breadcrumbs", "app-header-actions"):
+        assert sum(region in (attrs.get("class") or "").split() for attrs in parser.attributes) == 1
+    assert any(attrs.get("title") == path for attrs in parser.attributes)
+    assert 'href="/mail/long-project/overseer/compose"' in html
+    assert ".app-header-actions button { flex-shrink: 0; white-space: nowrap; }" in html
+    assert "text-overflow: ellipsis;" in html
+    assert ".app-header-actions { margin-left: auto; overflow-x: auto; }" in html
+
+
 def test_template_catalog_covers_translated_strings():
     template_dir = Path(__file__).parents[1] / "src/mcp_agent_mail/templates"
     env = Environment()

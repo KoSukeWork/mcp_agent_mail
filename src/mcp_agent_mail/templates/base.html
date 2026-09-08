@@ -235,6 +235,50 @@
     <link href="https://unpkg.com/vis-network@9.1.9/styles/vis-network.min.css" rel="stylesheet" type="text/css" />
 
     <style>
+      /* Long project paths must yield space to navigation controls, not wrap them. */
+      .app-header-layout {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        min-height: 4rem;
+      }
+      .app-header-leading {
+        display: flex;
+        align-items: center;
+        flex: 1 1 0%;
+        gap: 2rem;
+        min-width: 0;
+      }
+      .app-header-brand { flex-shrink: 0; white-space: nowrap; }
+      .app-header-breadcrumbs { flex: 1 1 0%; min-width: 0; }
+      .app-header-breadcrumbs > nav {
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+      .app-header-breadcrumbs > nav > :not(:last-child) { flex-shrink: 0; }
+      .app-header-breadcrumbs > nav > :last-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .app-header-actions {
+        display: flex;
+        align-items: center;
+        flex: 0 0 auto;
+        gap: .75rem;
+        max-width: 100%;
+        padding-block: .5rem;
+      }
+      .app-header-actions > *,
+      .app-header-actions a,
+      .app-header-actions button { flex-shrink: 0; white-space: nowrap; }
+      @media (max-width: 1023px) {
+        .app-header-layout { flex-wrap: wrap; gap: 0; padding-block: .5rem; }
+        .app-header-leading { flex-basis: 100%; gap: 1rem; }
+        .app-header-actions { margin-left: auto; overflow-x: auto; }
+      }
       [x-cloak] { display: none !important; }
 
       /* Tutorial Animations */
@@ -2154,12 +2198,12 @@
     </div>
 
     <!-- Navigation Header -->
-    <nav class="glass sticky top-0 z-40 border-b border-slate-200/80 dark:border-slate-700/80">
+    <nav class="app-header glass sticky top-0 z-40 border-b border-slate-200/80 dark:border-slate-700/80">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex items-center justify-between h-16">
+        <div class="app-header-layout">
           <!-- Logo and Brand -->
-          <div class="flex items-center gap-8">
-            <a href="/mail" class="flex items-center gap-3 group">
+          <div class="app-header-leading">
+            <a href="/mail" class="app-header-brand flex items-center gap-3 group">
               <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shadow-medium group-hover:shadow-glow transition-all duration-300">
                 <i data-lucide="mail" class="w-5 h-5 text-white"></i>
               </div>
@@ -2169,11 +2213,13 @@
             </a>
 
             <!-- Breadcrumbs -->
-            {% block breadcrumbs %}{% endblock %}
+            <div class="app-header-breadcrumbs">
+              {% block breadcrumbs %}{% endblock %}
+            </div>
           </div>
 
           <!-- Right side actions -->
-          <div class="flex items-center gap-3">
+          <div class="app-header-actions">
             {% block header_actions %}{% endblock %}
 
             <!-- Help Button -->
