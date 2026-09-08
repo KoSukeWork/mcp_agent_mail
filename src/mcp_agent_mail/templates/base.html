@@ -1135,14 +1135,14 @@
               </div>
               <div>
                 <div class="text-sm font-medium text-primary-100 mb-1">
-                  Step <span x-text="currentStep + 1"></span> of <span x-text="steps.length"></span>
+                  {{ _('Step') }} <span x-text="currentStep + 1"></span> / <span x-text="steps.length"></span>
                 </div>
                 <h2 class="text-2xl font-bold" x-text="steps[currentStep]?.title"></h2>
               </div>
             </div>
             <button @click="skip()"
                     class="w-10 h-10 bg-white/20 hover:bg-white/30 rounded-lg flex items-center justify-center transition-colors"
-                    data-tippy-content="Skip tutorial">
+                    data-tippy-content="{{ _('Skip tutorial') }}">
               <i data-lucide="x" class="w-5 h-5"></i>
             </button>
           </div>
@@ -1163,25 +1163,25 @@
                 </div>
 
                 <h3 class="text-4xl font-bold bg-gradient-to-r from-primary-600 via-purple-600 to-pink-600 bg-clip-text text-transparent mb-4">
-                  Welcome to Agent Mail! 👋
+                  {{ _('Welcome to Agent Mail!') }} 👋
                 </h3>
                 <p class="text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto mb-6">
-                  Think of this as <strong class="text-slate-900 dark:text-white">Slack for AI assistants</strong> working on your code.
+                  {{ _('Think of this as Slack for AI assistants working on your code.') }}
                 </p>
 
                 <!-- Quick stats -->
                 <div class="flex items-center justify-center gap-8 text-sm text-slate-500 dark:text-slate-400 mb-8">
                   <div class="flex items-center gap-2">
                     <i data-lucide="clock" class="w-4 h-4"></i>
-                    <span>2 min tour</span>
+                    <span>{{ _('2 min tour') }}</span>
                   </div>
                   <div class="flex items-center gap-2">
                     <i data-lucide="layers" class="w-4 h-4"></i>
-                    <span>8 steps</span>
+                    <span><span x-text="steps.length"></span> {{ _('steps') }}</span>
                   </div>
                   <div class="flex items-center gap-2">
                     <i data-lucide="zap" class="w-4 h-4"></i>
-                    <span>Interactive</span>
+                    <span>{{ _('Interactive') }}</span>
                   </div>
                 </div>
               </div>
@@ -1191,9 +1191,9 @@
                   <div class="w-12 h-12 bg-primary-500 rounded-xl flex items-center justify-center mb-4">
                     <i data-lucide="users" class="w-6 h-6 text-white"></i>
                   </div>
-                  <h4 class="font-bold text-slate-900 dark:text-white mb-2">Multiple AI Assistants</h4>
+                  <h4 class="font-bold text-slate-900 dark:text-white mb-2">{{ _('Multiple AI Assistants') }}</h4>
                   <p class="text-sm text-slate-600 dark:text-slate-400">
-                    Run Claude, GPT, Gemini, or other AI assistants simultaneously on the same codebase.
+                    {{ _('Run Claude, GPT, Gemini, or other AI assistants simultaneously on the same codebase.') }}
                   </p>
                 </div>
 
@@ -1201,9 +1201,9 @@
                   <div class="w-12 h-12 bg-success-500 rounded-xl flex items-center justify-center mb-4">
                     <i data-lucide="message-square" class="w-6 h-6 text-white"></i>
                   </div>
-                  <h4 class="font-bold text-slate-900 dark:text-white mb-2">Coordinate & Communicate</h4>
+                  <h4 class="font-bold text-slate-900 dark:text-white mb-2">{{ _('Coordinate & Communicate') }}</h4>
                   <p class="text-sm text-slate-600 dark:text-slate-400">
-                    Agents message each other, share context, and avoid stepping on each other's toes.
+                    {{ _("Agents message each other, share context, and avoid stepping on each other's toes.") }}
                   </p>
                 </div>
 
@@ -1211,9 +1211,9 @@
                   <div class="w-12 h-12 bg-warning-500 rounded-xl flex items-center justify-center mb-4">
                     <i data-lucide="shield-check" class="w-6 h-6 text-white"></i>
                   </div>
-                  <h4 class="font-bold text-slate-900 dark:text-white mb-2">Prevent Conflicts</h4>
+                  <h4 class="font-bold text-slate-900 dark:text-white mb-2">{{ _('Prevent Conflicts') }}</h4>
                   <p class="text-sm text-slate-600 dark:text-slate-400">
-                    Agents can "reserve" files they're editing, like putting a sticky note: "I'm working here!"
+                    {{ _('Agents can "reserve" files they\'re editing, like putting a sticky note: "I\'m working here!"') }}
                   </p>
                 </div>
 
@@ -1221,9 +1221,9 @@
                   <div class="w-12 h-12 bg-pink-500 rounded-xl flex items-center justify-center mb-4">
                     <i data-lucide="git-branch" class="w-6 h-6 text-white"></i>
                   </div>
-                  <h4 class="font-bold text-slate-900 dark:text-white mb-2">Everything Tracked</h4>
+                  <h4 class="font-bold text-slate-900 dark:text-white mb-2">{{ _('Everything Tracked') }}</h4>
                   <p class="text-sm text-slate-600 dark:text-slate-400">
-                    All messages and coordination saved in Git, so you can review what happened.
+                    {{ _('All messages and coordination saved in Git, so you can review what happened.') }}
                   </p>
                 </div>
               </div>
@@ -1236,32 +1236,32 @@
               <div class="aspect-video bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-900 rounded-xl border border-slate-300 dark:border-slate-700 p-8 flex items-center justify-center">
                 <div class="text-center">
                   <i data-lucide="folder" class="w-20 h-20 text-primary-500 mx-auto mb-4"></i>
-                  <div class="text-lg font-semibold text-slate-700 dark:text-slate-300">Visual: Project List</div>
+                <div class="text-lg font-semibold text-slate-700 dark:text-slate-300">{{ _('Visual: Project List') }}</div>
                 </div>
               </div>
 
               <div class="prose dark:prose-invert max-w-none">
-                <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">What's a Project?</h3>
+              <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">{{ _("What's a Project?") }}</h3>
                 <p class="text-lg text-slate-600 dark:text-slate-400 mb-4">
-                  A <strong>project</strong> is simply your <strong>code repository</strong> or workspace. Think of it as a folder where your AI assistants collaborate.
+                {{ _('A project is simply your code repository or workspace. Think of it as a folder where your AI assistants collaborate.') }}
                 </p>
 
                 <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-4">
                   <div class="flex items-start gap-3">
                     <i data-lucide="lightbulb" class="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0"></i>
                     <div class="text-sm text-blue-900 dark:text-blue-100">
-                      <strong>Example:</strong> You might have a "backend" project and a "frontend" project. Each has its own set of AI assistants working on it.
+                    {{ _('Example: You might have a "backend" project and a "frontend" project. Each has its own set of AI assistants working on it.') }}
                     </div>
                   </div>
                 </div>
 
                 <p class="text-slate-600 dark:text-slate-400">
-                  Each project shows:
+                {{ _('Each project shows:') }}
                 </p>
                 <ul class="space-y-2 text-slate-600 dark:text-slate-400">
-                  <li>✅ How many AI assistants are registered</li>
-                  <li>✅ How many messages have been exchanged</li>
-                  <li>✅ When it was created</li>
+                <li>✅ {{ _('How many AI assistants are registered') }}</li>
+                <li>✅ {{ _('How many messages have been exchanged') }}</li>
+                <li>✅ {{ _('When it was created') }}</li>
                 </ul>
               </div>
             </div>
@@ -1276,25 +1276,25 @@
                     <div class="w-20 h-20 bg-gradient-to-br from-primary-500 to-primary-700 rounded-2xl flex items-center justify-center shadow-lg">
                       <i data-lucide="folder" class="w-10 h-10 text-white"></i>
                     </div>
-                    <div class="text-sm font-semibold text-slate-700 dark:text-slate-300 mt-2">Frontend</div>
+                  <div class="text-sm font-semibold text-slate-700 dark:text-slate-300 mt-2">{{ _('Frontend') }}</div>
                   </div>
                   <div class="flex flex-col items-center gap-2">
                     <i data-lucide="git-branch" class="w-8 h-8 text-violet-500"></i>
-                    <div class="text-xs font-semibold text-violet-600 dark:text-violet-400">linked</div>
+                  <div class="text-xs font-semibold text-violet-600 dark:text-violet-400">{{ _('linked') }}</div>
                   </div>
                   <div class="text-center">
                     <div class="w-20 h-20 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl flex items-center justify-center shadow-lg">
                       <i data-lucide="folder" class="w-10 h-10 text-white"></i>
                     </div>
-                    <div class="text-sm font-semibold text-slate-700 dark:text-slate-300 mt-2">Backend</div>
+                  <div class="text-sm font-semibold text-slate-700 dark:text-slate-300 mt-2">{{ _('Backend') }}</div>
                   </div>
                 </div>
               </div>
 
               <div class="prose dark:prose-invert max-w-none">
-                <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">Discover Related Projects</h3>
+              <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">{{ _('Discover Related Projects') }}</h3>
                 <p class="text-lg text-slate-600 dark:text-slate-400 mb-4">
-                  Agent Mail can <strong>automatically detect</strong> when projects are related and should work together!
+                {{ _('Agent Mail can automatically detect when projects are related and should work together!') }}
                 </p>
 
                 <div class="bg-gradient-to-br from-violet-50 to-purple-50 dark:from-violet-900/20 dark:to-purple-900/20 border border-violet-200 dark:border-violet-800 rounded-lg p-5 mb-4">
@@ -1303,22 +1303,22 @@
                       <i data-lucide="sparkles" class="w-5 h-5 text-white"></i>
                     </div>
                     <div class="flex-1">
-                      <h4 class="font-bold text-violet-900 dark:text-violet-100 mb-2">Smart Suggestions</h4>
+                    <h4 class="font-bold text-violet-900 dark:text-violet-100 mb-2">{{ _('Smart Suggestions') }}</h4>
                       <p class="text-sm text-violet-800 dark:text-violet-200 mb-3">
-                        Using AI, we analyze your projects and suggest which ones should be linked based on:
+                      {{ _('Using AI, we analyze your projects and suggest which ones should be linked based on:') }}
                       </p>
                       <ul class="space-y-1.5 text-sm text-violet-700 dark:text-violet-300">
                         <li class="flex items-center gap-2">
                           <i data-lucide="check" class="w-4 h-4 text-violet-600 dark:text-violet-400"></i>
-                          <span>Similar code patterns and dependencies</span>
+                        <span>{{ _('Similar code patterns and dependencies') }}</span>
                         </li>
                         <li class="flex items-center gap-2">
                           <i data-lucide="check" class="w-4 h-4 text-violet-600 dark:text-violet-400"></i>
-                          <span>Shared file structures (like frontend + backend)</span>
+                        <span>{{ _('Shared file structures (like frontend + backend)') }}</span>
                         </li>
                         <li class="flex items-center gap-2">
                           <i data-lucide="check" class="w-4 h-4 text-violet-600 dark:text-violet-400"></i>
-                          <span>Common naming conventions</span>
+                        <span>{{ _('Common naming conventions') }}</span>
                         </li>
                       </ul>
                     </div>
@@ -1331,18 +1331,18 @@
                       <i data-lucide="shield-check" class="w-5 h-5 text-white"></i>
                     </div>
                     <div class="flex-1">
-                      <h4 class="font-bold text-amber-900 dark:text-amber-100 mb-2">Important: Discovery ≠ Messaging Permission</h4>
+                    <h4 class="font-bold text-amber-900 dark:text-amber-100 mb-2">{{ _('Important: Discovery ≠ Messaging Permission') }}</h4>
                       <p class="text-sm text-amber-800 dark:text-amber-200 mb-3">
-                        Confirming a link <strong>only updates your UI</strong> with handy navigation badges. It does <strong>not</strong> let agents automatically message across projects.
+                      {{ _('Confirming a link only updates your UI with handy navigation badges. It does not let agents automatically message across projects.') }}
                       </p>
                       <div class="bg-white/60 dark:bg-slate-800/60 rounded-lg p-3 text-xs text-amber-900 dark:text-amber-100 space-y-2">
                         <div class="flex items-start gap-2">
                           <span class="text-emerald-600 dark:text-emerald-400 font-bold">✓</span>
-                          <span><strong>What confirmation does:</strong> Adds badges for quick navigation between related projects</span>
+                        <span>{{ _('What confirmation does: Adds badges for quick navigation between related projects') }}</span>
                         </div>
                         <div class="flex items-start gap-2">
                           <span class="text-red-600 dark:text-red-400 font-bold">✗</span>
-                          <span><strong>What it doesn't do:</strong> Grant agents permission to send messages across projects</span>
+                        <span>{{ _("What it doesn't do: Grant agents permission to send messages across projects") }}</span>
                         </div>
                       </div>
                     </div>
@@ -1355,27 +1355,27 @@
                       <i data-lucide="lock" class="w-5 h-5 text-white"></i>
                     </div>
                     <div class="flex-1">
-                      <h4 class="font-bold text-blue-900 dark:text-blue-100 mb-2">Why Keep Them Separate?</h4>
+                    <h4 class="font-bold text-blue-900 dark:text-blue-100 mb-2">{{ _('Why Keep Them Separate?') }}</h4>
                       <p class="text-sm text-blue-800 dark:text-blue-200 mb-3">
-                        <strong>Agent Mail uses agent-centric messaging</strong> — every message requires explicit permission. This ensures:
+                      {{ _('Agent Mail uses agent-centric messaging — every message requires explicit permission. This ensures:') }}
                       </p>
                       <div class="space-y-2 text-sm text-blue-700 dark:text-blue-300">
                         <div class="flex items-center gap-2">
                           <i data-lucide="shield" class="w-4 h-4 text-blue-600 dark:text-blue-400"></i>
-                          <span><strong>Security:</strong> No surprise deliveries to unintended recipients</span>
+                        <span>{{ _('Security: No surprise deliveries to unintended recipients') }}</span>
                         </div>
                         <div class="flex items-center gap-2">
                           <i data-lucide="eye" class="w-4 h-4 text-blue-600 dark:text-blue-400"></i>
-                          <span><strong>Transparency:</strong> You always know who can message whom</span>
+                        <span>{{ _('Transparency: You always know who can message whom') }}</span>
                         </div>
                         <div class="flex items-center gap-2">
                           <i data-lucide="check-square" class="w-4 h-4 text-blue-600 dark:text-blue-400"></i>
-                          <span><strong>Control:</strong> You approve every communication path</span>
+                        <span>{{ _('Control: You approve every communication path') }}</span>
                         </div>
                       </div>
                       <div class="mt-3 pt-3 border-t border-blue-200 dark:border-blue-700">
                         <p class="text-xs text-blue-700 dark:text-blue-300 italic">
-                          Think of it like LinkedIn: The system suggests connections (discovery), but only you decide who can send messages (authorization).
+                      {{ _('Think of it like LinkedIn: The system suggests connections (discovery), but only you decide who can send messages (authorization).') }}
                         </p>
                       </div>
                     </div>
@@ -1386,7 +1386,7 @@
                   <div class="flex items-start gap-3">
                     <i data-lucide="info" class="w-5 h-5 text-slate-600 dark:text-slate-400 mt-0.5 flex-shrink-0"></i>
                     <div class="text-sm text-slate-700 dark:text-slate-300">
-                      <strong>Where to find it:</strong> Look for the "Related Projects" section on your project cards. You'll see suggestions with confidence scores and AI-generated explanations!
+                    {{ _('Where to find it: Look for the "Related Projects" section on your project cards. You\'ll see suggestions with confidence scores and AI-generated explanations!') }}
                     </div>
                   </div>
                 </div>
@@ -1423,27 +1423,27 @@
               </div>
 
               <div class="prose dark:prose-invert max-w-none">
-                <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">What are Agents?</h3>
+              <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">{{ _('What are Agents?') }}</h3>
                 <p class="text-lg text-slate-600 dark:text-slate-400 mb-4">
-                  <strong>Agents</strong> are just <strong>AI assistants</strong> (like Claude, GPT, Gemini) working on your code. Each one gets a unique, memorable name.
+                {{ _('Agents are just AI assistants (like Claude, GPT, Gemini) working on your code. Each one gets a unique, memorable name.') }}
                 </p>
 
                 <div class="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4 mb-4">
                   <div class="flex items-start gap-3">
                     <i data-lucide="sparkles" class="w-5 h-5 text-purple-600 mt-0.5 flex-shrink-0"></i>
                     <div class="text-sm text-purple-900 dark:text-purple-100">
-                      <strong>Fun fact:</strong> Agents get names like "BlueLake" or "GreenCastle" - much easier than "agent_7492_claude"!
+                    {{ _('Fun fact: Agents get names like "BlueLake" or "GreenCastle" - much easier than "agent_7492_claude"!') }}
                     </div>
                   </div>
                 </div>
 
                 <p class="text-slate-600 dark:text-slate-400">
-                  You can:
+                {{ _('You can:') }}
                 </p>
                 <ul class="space-y-2 text-slate-600 dark:text-slate-400">
-                  <li>📬 View each agent's inbox (messages sent to them)</li>
-                  <li>👤 See what program/model they're using (e.g., "claude-code" with "opus-4.1")</li>
-                  <li>📋 Copy their name to use in commands</li>
+                <li>📬 {{ _("View each agent's inbox (messages sent to them)") }}</li>
+                <li>👤 {{ _('See what program/model they\'re using (e.g., "claude-code" with "opus-4.1")') }}</li>
+                <li>📋 {{ _('Copy their name to use in commands') }}</li>
                 </ul>
               </div>
             </div>
@@ -1460,11 +1460,11 @@
                     </div>
                     <div class="flex-1">
                       <div class="font-semibold text-slate-900 dark:text-white">BlueLake</div>
-                      <div class="text-sm text-slate-600 dark:text-slate-400">2 minutes ago</div>
+                      <div class="text-sm text-slate-600 dark:text-slate-400">{{ _('2 minutes ago') }}</div>
                     </div>
                   </div>
                   <div class="ml-13 bg-slate-50 dark:bg-slate-900 rounded-lg p-3 text-sm text-slate-700 dark:text-slate-300">
-                    Hey GreenCastle, I'm working on the authentication system. Can you handle the database migrations?
+                    {{ _("Hey GreenCastle, I'm working on the authentication system. Can you handle the database migrations?") }}
                   </div>
                 </div>
 
@@ -1475,34 +1475,34 @@
                     </div>
                     <div class="flex-1">
                       <div class="font-semibold text-slate-900 dark:text-white">GreenCastle</div>
-                      <div class="text-sm text-slate-600 dark:text-slate-400">1 minute ago</div>
+                      <div class="text-sm text-slate-600 dark:text-slate-400">{{ _('1 minute ago') }}</div>
                     </div>
                   </div>
                   <div class="ml-13 bg-slate-50 dark:bg-slate-900 rounded-lg p-3 text-sm text-slate-700 dark:text-slate-300">
-                    Sure! I'll create the migration files. I'm reserving the db/migrations folder so we don't conflict.
+                    {{ _("Sure! I'll create the migration files. I'm reserving the db/migrations folder so we don't conflict.") }}
                   </div>
                 </div>
               </div>
 
               <div class="prose dark:prose-invert max-w-none">
-                <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">How Agents Communicate</h3>
+              <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">{{ _('How Agents Communicate') }}</h3>
                 <p class="text-lg text-slate-600 dark:text-slate-400 mb-4">
-                  Agents send <strong>messages</strong> to each other, just like email or Slack. They can:
+                {{ _('Agents send messages to each other, just like email or Slack. They can:') }}
                 </p>
 
                 <ul class="space-y-2 text-slate-600 dark:text-slate-400">
-                  <li>💬 Share what they're working on</li>
-                  <li>🤝 Coordinate who does what</li>
-                  <li>📝 Document decisions and changes</li>
-                  <li>⚠️ Flag urgent issues</li>
-                  <li>🔗 Continue conversations in threads</li>
+                <li>💬 {{ _("Share what they're working on") }}</li>
+                <li>🤝 {{ _('Coordinate who does what') }}</li>
+                <li>📝 {{ _('Document decisions and changes') }}</li>
+                <li>⚠️ {{ _('Flag urgent issues') }}</li>
+                <li>🔗 {{ _('Continue conversations in threads') }}</li>
                 </ul>
 
                 <div class="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 mt-4">
                   <div class="flex items-start gap-3">
                     <i data-lucide="check-circle" class="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0"></i>
                     <div class="text-sm text-green-900 dark:text-green-100">
-                      <strong>Why this matters:</strong> Instead of agents silently stepping on each other's work, they communicate and coordinate like a team!
+                    {{ _("Why this matters: Instead of agents silently stepping on each other's work, they communicate and coordinate like a team!") }}
                     </div>
                   </div>
                 </div>
@@ -1528,20 +1528,20 @@
                   <div class="flex-1 text-white">
                     <div class="inline-flex items-center gap-2 px-3 py-1 bg-white/20 backdrop-blur-sm rounded-full text-xs font-bold mb-3 border border-white/30">
                       <i data-lucide="sparkles" class="w-3 h-3"></i>
-                      <span>NEW FEATURE</span>
+                    <span>{{ _('NEW FEATURE') }}</span>
                     </div>
                     <h3 class="text-3xl font-bold mb-3">
-                      You Can Guide Agents Directly!
+                    {{ _('You Can Guide Agents Directly!') }}
                     </h3>
                     <p class="text-amber-50 text-lg leading-relaxed">
-                      Sometimes you need to jump in and redirect your AI team. The <strong class="text-white">Human Overseer</strong> feature lets you send high-priority messages that agents will prioritize immediately.
+                    {{ _('Sometimes you need to jump in and redirect your AI team. The Human Overseer feature lets you send high-priority messages that agents will prioritize immediately.') }}
                     </p>
                   </div>
                 </div>
               </div>
 
               <div class="prose dark:prose-invert max-w-none">
-                <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">When to Use Human Overseer</h3>
+              <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">{{ _('When to Use Human Overseer') }}</h3>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 not-prose mb-6">
                   <div class="bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-800 rounded-xl p-5">
@@ -1549,10 +1549,10 @@
                       <div class="w-10 h-10 bg-red-500 rounded-lg flex items-center justify-center flex-shrink-0">
                         <i data-lucide="alert-triangle" class="w-5 h-5 text-white"></i>
                       </div>
-                      <h4 class="font-bold text-red-900 dark:text-red-100 text-lg">Urgent Issues</h4>
+                    <h4 class="font-bold text-red-900 dark:text-red-100 text-lg">{{ _('Urgent Issues') }}</h4>
                     </div>
                     <p class="text-sm text-red-800 dark:text-red-200">
-                      "Stop everything! The production database is down. Everyone investigate the connection pool immediately."
+                    {{ _('"Stop everything! The production database is down. Everyone investigate the connection pool immediately."') }}
                     </p>
                   </div>
 
@@ -1561,10 +1561,10 @@
                       <div class="w-10 h-10 bg-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
                         <i data-lucide="zap" class="w-5 h-5 text-white"></i>
                       </div>
-                      <h4 class="font-bold text-orange-900 dark:text-orange-100 text-lg">Priority Change</h4>
+                    <h4 class="font-bold text-orange-900 dark:text-orange-100 text-lg">{{ _('Priority Change') }}</h4>
                     </div>
                     <p class="text-sm text-orange-800 dark:text-orange-200">
-                      "New requirement from CEO: pause the dashboard and focus on the mobile app authentication first."
+                    {{ _('"New requirement from CEO: pause the dashboard and focus on the mobile app authentication first."') }}
                     </p>
                   </div>
 
@@ -1573,10 +1573,10 @@
                       <div class="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center flex-shrink-0">
                         <i data-lucide="message-circle" class="w-5 h-5 text-white"></i>
                       </div>
-                      <h4 class="font-bold text-blue-900 dark:text-blue-100 text-lg">Clarification</h4>
+                    <h4 class="font-bold text-blue-900 dark:text-blue-100 text-lg">{{ _('Clarification') }}</h4>
                     </div>
                     <p class="text-sm text-blue-800 dark:text-blue-200">
-                      "I see you're debating API approaches. Go with REST for now - we can add GraphQL later if needed."
+                    {{ _('"I see you\'re debating API approaches. Go with REST for now - we can add GraphQL later if needed."') }}
                     </p>
                   </div>
 
@@ -1585,15 +1585,15 @@
                       <div class="w-10 h-10 bg-purple-500 rounded-lg flex items-center justify-center flex-shrink-0">
                         <i data-lucide="target" class="w-5 h-5 text-white"></i>
                       </div>
-                      <h4 class="font-bold text-purple-900 dark:text-purple-100 text-lg">Course Correction</h4>
+                    <h4 class="font-bold text-purple-900 dark:text-purple-100 text-lg">{{ _('Course Correction') }}</h4>
                     </div>
                     <p class="text-sm text-purple-800 dark:text-purple-200">
-                      "The refactoring you're doing is going too deep. Focus on just the auth module for now."
+                    {{ _('"The refactoring you\'re doing is going too deep. Focus on just the auth module for now."') }}
                     </p>
                   </div>
                 </div>
 
-                <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4 mt-8">How It Works</h3>
+              <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4 mt-8">{{ _('How It Works') }}</h3>
 
                 <div class="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900 rounded-xl p-6 border-2 border-slate-200 dark:border-slate-700 not-prose mb-6">
                   <div class="space-y-4">
@@ -1602,9 +1602,9 @@
                         1
                       </div>
                       <div class="flex-1">
-                        <div class="font-bold text-slate-900 dark:text-white mb-1">Visit Any Project</div>
+                    <div class="font-bold text-slate-900 dark:text-white mb-1">{{ _('Visit Any Project') }}</div>
                         <div class="text-sm text-slate-600 dark:text-slate-400">
-                          Click the bright orange <strong>"Send Message"</strong> button with the Overseer badge
+                      {{ _('Click the bright orange "Send Message" button with the Overseer badge') }}
                         </div>
                       </div>
                     </div>
@@ -1614,9 +1614,9 @@
                         2
                       </div>
                       <div class="flex-1">
-                        <div class="font-bold text-slate-900 dark:text-white mb-1">Select Recipients</div>
+                    <div class="font-bold text-slate-900 dark:text-white mb-1">{{ _('Select Recipients') }}</div>
                         <div class="text-sm text-slate-600 dark:text-slate-400">
-                          Choose which agents should receive your message. You can send to all or just specific agents.
+                      {{ _('Choose which agents should receive your message. You can send to all or just specific agents.') }}
                         </div>
                       </div>
                     </div>
@@ -1626,9 +1626,9 @@
                         3
                       </div>
                       <div class="flex-1">
-                        <div class="font-bold text-slate-900 dark:text-white mb-1">Write Your Message</div>
+                    <div class="font-bold text-slate-900 dark:text-white mb-1">{{ _('Write Your Message') }}</div>
                         <div class="text-sm text-slate-600 dark:text-slate-400">
-                          Use the rich Markdown editor with live preview. Your message will get a special preamble.
+                      {{ _('Use the rich Markdown editor with live preview. Your message will get a special preamble.') }}
                         </div>
                       </div>
                     </div>
@@ -1638,9 +1638,9 @@
                         4
                       </div>
                       <div class="flex-1">
-                        <div class="font-bold text-slate-900 dark:text-white mb-1">Agents Pause & Prioritize</div>
+                    <div class="font-bold text-slate-900 dark:text-white mb-1">{{ _('Agents Pause & Prioritize') }}</div>
                         <div class="text-sm text-slate-600 dark:text-slate-400">
-                          Agents see it's from the Human Overseer and will pause their work to address your request first.
+                      {{ _("Agents see it's from the Human Overseer and will pause their work to address your request first.") }}
                         </div>
                       </div>
                     </div>
@@ -1651,9 +1651,9 @@
                   <div class="flex items-start gap-3">
                     <i data-lucide="info" class="w-6 h-6 text-amber-600 mt-0.5 flex-shrink-0"></i>
                     <div class="text-sm text-amber-900 dark:text-amber-100">
-                      <p class="font-semibold mb-2">What happens to their current work?</p>
+                    <p class="font-semibold mb-2">{{ _('What happens to their current work?') }}</p>
                       <p class="leading-relaxed">
-                        Agents are instructed to <strong>temporarily pause</strong> their current tasks, complete your request, then <strong>resume their original plans</strong> unless you've changed the direction. Think of it like a polite interruption, not a hard reset!
+                      {{ _("Agents are instructed to temporarily pause their current tasks, complete your request, then resume their original plans unless you've changed the direction. Think of it like a polite interruption, not a hard reset!") }}
                       </p>
                     </div>
                   </div>
@@ -1672,10 +1672,10 @@
                   </div>
                   <div>
                     <h4 class="text-xl font-bold text-warning-900 dark:text-warning-100 mb-2">
-                      File Reservations
+                    {{ _('File Reservations') }}
                     </h4>
                     <p class="text-warning-800 dark:text-warning-200">
-                      Think of it like putting a sticky note on a file: "I'm working here - please wait!"
+                    {{ _('Think of it like putting a sticky note on a file: "I\'m working here - please wait!"') }}
                     </p>
                   </div>
                 </div>
@@ -1686,7 +1686,7 @@
                     <span class="flex-1 font-mono text-sm text-slate-700 dark:text-slate-300">src/auth/*.ts</span>
                     <span class="px-3 py-1 bg-success-100 dark:bg-success-900/30 text-success-700 dark:text-success-300 text-xs font-bold rounded-full flex items-center gap-1.5">
                       <i data-lucide="lock" class="w-3 h-3"></i>
-                      Reserved by BlueLake
+                      {{ _('Reserved by BlueLake') }}
                     </span>
                   </div>
                   <div class="flex items-center gap-3">
@@ -1694,42 +1694,42 @@
                     <span class="flex-1 font-mono text-sm text-slate-700 dark:text-slate-300">db/migrations/*</span>
                     <span class="px-3 py-1 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 text-xs font-bold rounded-full flex items-center gap-1.5">
                       <i data-lucide="lock" class="w-3 h-3"></i>
-                      Reserved by GreenCastle
+                      {{ _('Reserved by GreenCastle') }}
                     </span>
                   </div>
                 </div>
               </div>
 
               <div class="prose dark:prose-invert max-w-none">
-                <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">Preventing Edit Conflicts</h3>
+              <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">{{ _('Preventing Edit Conflicts') }}</h3>
                 <p class="text-lg text-slate-600 dark:text-slate-400 mb-4">
-                  When an agent is editing files, they can <strong>"reserve" them temporarily</strong>. This tells other agents:
+                {{ _('When an agent is editing files, they can "reserve" them temporarily. This tells other agents:') }}
                 </p>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 not-prose">
                   <div class="bg-success-50 dark:bg-success-900/20 border border-success-200 dark:border-success-800 rounded-lg p-4">
                     <div class="flex items-center gap-2 mb-2">
                       <i data-lucide="check" class="w-5 h-5 text-success-600"></i>
-                      <span class="font-bold text-success-900 dark:text-success-100">What it DOES:</span>
+                    <span class="font-bold text-success-900 dark:text-success-100">{{ _('What it DOES:') }}</span>
                     </div>
                     <ul class="text-sm text-success-800 dark:text-success-200 space-y-1 list-disc list-inside">
-                      <li>Signals "I'm editing this"</li>
-                      <li>Prevents accidental conflicts</li>
-                      <li>Auto-expires after set time</li>
-                      <li>Tracked in Git for transparency</li>
+                    <li>{{ _('Signals "I\'m editing this"') }}</li>
+                    <li>{{ _('Prevents accidental conflicts') }}</li>
+                    <li>{{ _('Auto-expires after set time') }}</li>
+                    <li>{{ _('Tracked in Git for transparency') }}</li>
                     </ul>
                   </div>
 
                   <div class="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4">
                     <div class="flex items-center gap-2 mb-2">
                       <i data-lucide="info" class="w-5 h-5 text-slate-600"></i>
-                      <span class="font-bold text-slate-900 dark:text-slate-100">What it DOESN'T:</span>
+                    <span class="font-bold text-slate-900 dark:text-slate-100">{{ _("What it DOESN'T:") }}</span>
                     </div>
                     <ul class="text-sm text-slate-600 dark:text-slate-400 space-y-1 list-disc list-inside">
-                      <li>Lock files permanently</li>
-                      <li>Block you from editing</li>
-                      <li>Require approval to use</li>
-                      <li>Cause merge conflicts</li>
+                    <li>{{ _('Lock files permanently') }}</li>
+                    <li>{{ _('Block you from editing') }}</li>
+                    <li>{{ _('Require approval to use') }}</li>
+                    <li>{{ _('Cause merge conflicts') }}</li>
                     </ul>
                   </div>
                 </div>
@@ -1738,7 +1738,7 @@
                   <div class="flex items-start gap-3">
                     <i data-lucide="lightbulb" class="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0"></i>
                     <div class="text-sm text-blue-900 dark:text-blue-100">
-                      <strong>Think of it like:</strong> When you see a "Reserved" parking spot with someone's name on it. You <em>can</em> park there if needed, but the sign helps you know someone else might be using it soon!
+                      {{ _('Think of it like: When you see a "Reserved" parking spot with someone\'s name on it. You can park there if needed, but the sign helps you know someone else might be using it soon!') }}
                     </div>
                   </div>
                 </div>
@@ -1750,7 +1750,7 @@
           <template x-if="currentStep === 7">
             <div class="space-y-6 animate-fade-in">
               <div class="prose dark:prose-invert max-w-none">
-                <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-6 text-center">Powerful Features Built In</h3>
+              <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-6 text-center">{{ _('Powerful Features Built In') }}</h3>
               </div>
 
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1759,14 +1759,14 @@
                     <div class="w-10 h-10 bg-primary-100 dark:bg-primary-900/30 rounded-lg flex items-center justify-center">
                       <i data-lucide="search" class="w-5 h-5 text-primary-600"></i>
                     </div>
-                    <h4 class="font-bold text-slate-900 dark:text-white">Search Everything</h4>
+                    <h4 class="font-bold text-slate-900 dark:text-white">{{ _('Search Everything') }}</h4>
                   </div>
                   <p class="text-sm text-slate-600 dark:text-slate-400 mb-3">
-                    Find any message, conversation, or file reservation across all projects instantly.
+                    {{ _('Find any message, conversation, or file reservation across all projects instantly.') }}
                   </p>
                   <div class="flex items-center gap-2 text-xs text-slate-500">
                     <kbd class="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded">⌘K</kbd>
-                    <span>or</span>
+                    <span>{{ _('or') }}</span>
                     <kbd class="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded">/</kbd>
                   </div>
                 </div>
@@ -1776,14 +1776,14 @@
                     <div class="w-10 h-10 bg-purple-100 dark:bg-purple-900/30 rounded-lg flex items-center justify-center">
                       <i data-lucide="keyboard" class="w-5 h-5 text-purple-600"></i>
                     </div>
-                    <h4 class="font-bold text-slate-900 dark:text-white">Keyboard Shortcuts</h4>
+                    <h4 class="font-bold text-slate-900 dark:text-white">{{ _('Keyboard Shortcuts') }}</h4>
                   </div>
                   <p class="text-sm text-slate-600 dark:text-slate-400 mb-3">
-                    Navigate at lightning speed with Gmail-style keyboard shortcuts.
+                    {{ _('Navigate at lightning speed with Gmail-style keyboard shortcuts.') }}
                   </p>
                   <div class="flex items-center gap-2 text-xs text-slate-500">
                     <kbd class="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded">?</kbd>
-                    <span>to see all shortcuts</span>
+                    <span>{{ _('to see all shortcuts') }}</span>
                   </div>
                 </div>
 
@@ -1792,10 +1792,10 @@
                     <div class="w-10 h-10 bg-success-100 dark:bg-success-900/30 rounded-lg flex items-center justify-center">
                       <i data-lucide="filter" class="w-5 h-5 text-success-600"></i>
                     </div>
-                    <h4 class="font-bold text-slate-900 dark:text-white">Smart Filtering</h4>
+                    <h4 class="font-bold text-slate-900 dark:text-white">{{ _('Smart Filtering') }}</h4>
                   </div>
                   <p class="text-sm text-slate-600 dark:text-slate-400">
-                    Filter by unread, urgent, sender, or search across all messages in an inbox.
+                    {{ _('Filter by unread, urgent, sender, or search across all messages in an inbox.') }}
                   </p>
                 </div>
 
@@ -1804,10 +1804,10 @@
                     <div class="w-10 h-10 bg-warning-100 dark:bg-warning-900/30 rounded-lg flex items-center justify-center">
                       <i data-lucide="git-branch" class="w-5 h-5 text-warning-600"></i>
                     </div>
-                    <h4 class="font-bold text-slate-900 dark:text-white">Git-Backed</h4>
+                    <h4 class="font-bold text-slate-900 dark:text-white">{{ _('Git-Backed') }}</h4>
                   </div>
                   <p class="text-sm text-slate-600 dark:text-slate-400">
-                    Every message and reservation is saved in Git. Review the full history anytime.
+                    {{ _('Every message and reservation is saved in Git. Review the full history anytime.') }}
                   </p>
                 </div>
               </div>
@@ -1831,18 +1831,18 @@
               <div>
                 <h3 class="text-5xl font-bold mb-2">
                   <span class="bg-gradient-to-r from-success-600 via-emerald-600 to-green-600 bg-clip-text text-transparent">
-                    You're All Set!
+                  {{ _("You're All Set!") }}
                   </span>
                   <span class="inline-block animate-wave text-4xl ml-2">🎉</span>
                 </h3>
                 <p class="text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto mb-6">
-                  You now understand how Agent Mail helps AI assistants work together smoothly!
+                  {{ _('You now understand how Agent Mail helps AI assistants work together smoothly!') }}
                 </p>
 
                 <!-- Achievement badge -->
                 <div class="inline-flex items-center gap-3 px-6 py-3 bg-gradient-to-r from-success-50 to-emerald-50 dark:from-success-900/20 dark:to-emerald-900/20 border-2 border-success-200 dark:border-success-800 rounded-full shadow-lg mb-8">
                   <i data-lucide="award" class="w-5 h-5 text-success-600"></i>
-                  <span class="font-bold text-success-900 dark:text-success-100">Tutorial Complete</span>
+                    <span class="font-bold text-success-900 dark:text-success-100">{{ _('Tutorial Complete') }}</span>
                   <i data-lucide="sparkles" class="w-5 h-5 text-success-600"></i>
                 </div>
               </div>
@@ -1850,20 +1850,20 @@
               <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
                 <div class="bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 rounded-xl p-4">
                   <div class="text-4xl mb-2">⌘K</div>
-                  <div class="font-semibold text-slate-900 dark:text-white">Command Palette</div>
-                  <div class="text-xs text-slate-600 dark:text-slate-400">Quick navigation</div>
+                  <div class="font-semibold text-slate-900 dark:text-white">{{ _('Command Palette') }}</div>
+                  <div class="text-xs text-slate-600 dark:text-slate-400">{{ _('Quick navigation') }}</div>
                 </div>
 
                 <div class="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-xl p-4">
                   <div class="text-4xl mb-2">?</div>
-                  <div class="font-semibold text-slate-900 dark:text-white">Keyboard Help</div>
-                  <div class="text-xs text-slate-600 dark:text-slate-400">See all shortcuts</div>
+                  <div class="font-semibold text-slate-900 dark:text-white">{{ _('Keyboard Help') }}</div>
+                  <div class="text-xs text-slate-600 dark:text-slate-400">{{ _('See all shortcuts') }}</div>
                 </div>
 
                 <div class="bg-success-50 dark:bg-success-900/20 border border-success-200 dark:border-success-800 rounded-xl p-4">
                   <div class="text-4xl mb-2">💡</div>
-                  <div class="font-semibold text-slate-900 dark:text-white">Tooltips Everywhere</div>
-                  <div class="text-xs text-slate-600 dark:text-slate-400">Hover for help</div>
+                  <div class="font-semibold text-slate-900 dark:text-white">{{ _('Tooltips Everywhere') }}</div>
+                  <div class="text-xs text-slate-600 dark:text-slate-400">{{ _('Hover for help') }}</div>
                 </div>
               </div>
 
@@ -1871,7 +1871,7 @@
                 <div class="flex items-start gap-3 text-left">
                   <i data-lucide="info" class="w-5 h-5 text-primary-600 mt-0.5 flex-shrink-0"></i>
                   <div class="text-sm text-primary-900 dark:text-primary-100">
-                    <strong>Need help later?</strong> Click the <i data-lucide="help-circle" class="w-4 h-4 inline-block"></i> button in the header to access the Help Center, or press <kbd class="px-1.5 py-0.5 bg-white dark:bg-slate-700 rounded text-xs">?</kbd> for shortcuts!
+                  {{ _('Need help later? Click the help button in the header to access the Help Center, or press ? for shortcuts!') }}
                   </div>
                 </div>
               </div>
@@ -1885,7 +1885,7 @@
                   x-show="currentStep > 0"
                   class="px-6 py-3 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold rounded-lg border border-slate-300 dark:border-slate-600 transition-all duration-200 flex items-center gap-2">
             <i data-lucide="chevron-left" class="w-4 h-4"></i>
-            Back
+            {{ _('Previous step') }}
           </button>
 
           <div class="flex items-center gap-2">
@@ -1893,13 +1893,13 @@
               <button @click="currentStep = index"
                       :class="index === currentStep ? 'w-8 bg-primary-600' : 'w-2 bg-slate-300 dark:bg-slate-600 hover:bg-slate-400 dark:hover:bg-slate-500'"
                       class="h-2 rounded-full transition-all duration-300"
-                      :aria-label="'Go to step ' + (index + 1)"></button>
+                      :aria-label='{{ _("Go to step") | tojson }} + " " + (index + 1)'></button>
             </template>
           </div>
 
           <button @click="next()"
                   class="px-6 py-3 bg-gradient-to-r from-primary-600 to-purple-600 hover:from-primary-700 hover:to-purple-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-300 flex items-center gap-2 btn-ripple">
-            <span x-text="currentStep < steps.length - 1 ? 'Next' : 'Get Started'"></span>
+            <span x-text='currentStep < steps.length - 1 ? {{ _("Next step") | tojson }} : {{ _("Get Started") | tojson }}'></span>
             <i data-lucide="chevron-right" class="w-4 h-4" x-show="currentStep < steps.length - 1"></i>
             <i data-lucide="check" class="w-4 h-4" x-show="currentStep === steps.length - 1"></i>
           </button>
@@ -2293,15 +2293,15 @@
           eventListeners: [],
           animationCleanup: null,
           steps: [
-            { title: 'Welcome to Agent Mail', icon: 'mail', actions: [] },
-            { title: 'What are Projects?', icon: 'folder', actions: ['viewed_projects'] },
-            { title: 'Related Projects', icon: 'git-branch', actions: ['learned_siblings'] },
-            { title: 'What are Agents?', icon: 'bot', actions: ['learned_agents'] },
-            { title: 'How Agents Communicate', icon: 'message-square', actions: ['learned_messages'] },
-            { title: 'Human Overseer', icon: 'shield-alert', actions: ['learned_overseer'] },
-            { title: 'File Reservations', icon: 'file-lock', actions: ['learned_reservations'] },
-            { title: 'Powerful Features', icon: 'sparkles', actions: ['learned_features'] },
-            { title: 'You\'re All Set!', icon: 'check-circle', actions: [] }
+            { title: {{ _('Welcome to Agent Mail') | tojson }}, icon: 'mail', actions: [] },
+            { title: {{ _('What are Projects?') | tojson }}, icon: 'folder', actions: ['viewed_projects'] },
+            { title: {{ _('Related Projects') | tojson }}, icon: 'git-branch', actions: ['learned_siblings'] },
+            { title: {{ _('What are Agents?') | tojson }}, icon: 'bot', actions: ['learned_agents'] },
+            { title: {{ _('How Agents Communicate') | tojson }}, icon: 'message-square', actions: ['learned_messages'] },
+            { title: {{ _('Human Overseer') | tojson }}, icon: 'shield-alert', actions: ['learned_overseer'] },
+            { title: {{ _('File Reservations') | tojson }}, icon: 'file-lock', actions: ['learned_reservations'] },
+            { title: {{ _('Powerful Features') | tojson }}, icon: 'sparkles', actions: ['learned_features'] },
+            { title: {{ _("You're All Set!") | tojson }}, icon: 'check-circle', actions: [] }
           ],
 
           // Computed progress with divide-by-zero protection
@@ -2394,7 +2394,7 @@
             localStorage.setItem('agentmail_tutorial_completed', 'true');
             this.saveProgress();
             this.isActive = false;
-            window.showToast('Tutorial completed! Press ? for keyboard shortcuts anytime.', 'success', 4000);
+              window.showToast({{ _('Tutorial completed! Press ? for keyboard shortcuts anytime.') | tojson }}, 'success', 4000);
           },
 
           restart() {
@@ -2438,10 +2438,10 @@
           showMicroFeedback(action) {
             // Small toast or sparkle effect
             const messages = {
-              'used_command_palette': '✨ Nice! You used the command palette!',
-              'viewed_shortcuts': '⌨️ Great! You checked the shortcuts!',
-              'clicked_inbox': '📬 You found the inbox!',
-              'searched_messages': '🔍 You tried searching!'
+              'used_command_palette': {{ _('✨ Nice! You used the command palette!') | tojson }},
+              'viewed_shortcuts': {{ _('⌨️ Great! You checked the shortcuts!') | tojson }},
+              'clicked_inbox': {{ _('📬 You found the inbox!') | tojson }},
+              'searched_messages': {{ _('🔍 You tried searching!') | tojson }}
             };
 
             if (messages[action]) {
@@ -2661,8 +2661,8 @@
             },
             {
               id: 'show-tutorial',
-              title: 'Interactive Tutorial',
-              description: 'Learn how Agent Mail works',
+              title: {{ _('Interactive Tutorial') | tojson }},
+              description: {{ _('Learn how Agent Mail works') | tojson }},
               icon: 'graduation-cap',
               iconBg: 'rgba(16, 185, 129, 0.1)',
               iconColor: 'text-success-600',
