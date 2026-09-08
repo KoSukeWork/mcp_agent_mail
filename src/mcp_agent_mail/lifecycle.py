@@ -7,18 +7,20 @@ Only a successfully claimed temporary mailbox can enter the purge phase.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy import delete, func, or_, select as sa_select, text, update
+from sqlalchemy import delete, func, or_, select as sa_select, text, true, update
+from sqlalchemy.engine import make_url
 from sqlmodel import SQLModel, select
 
 from .config import Settings
 from .db import get_session
-from .models import MailboxEvent, Project
+from .models import LegacyImportRecord, MailboxEvent, Project
 from .storage import AsyncFileLock
 
 TRASH_DAYS = 7
@@ -189,9 +191,44 @@ def _legacy_messages(directory: Path) -> list[tuple[dict[str, Any], str]]:
     return messages
 
 
+def _legacy_file_fingerprints(directory: Path) -> dict[Path, str]:
+    """Read retained files without following links or loading large attachments into RAM."""
+    if directory.is_symlink() or directory.is_junction():
+        raise ValueError("Linked legacy archive directories are not allowed")
+    fingerprints = {}
+    if not directory.exists():
+        return fingerprints
+    for parent, directories, files in directory.walk():
+        for name in directories + files:
+            path = parent / name
+            if path.is_symlink() or path.is_junction():
+                raise ValueError(f"Linked legacy content is not allowed: {path}")
+        for name in files:
+            path = parent / name
+            with path.open("rb") as source:
+                fingerprints[path] = hashlib.file_digest(source, "sha256").hexdigest()
+    return fingerprints
+
+
+def _legacy_manifest_digest(directory: Path, fingerprints: dict[Path, str]) -> str:
+    manifest = {path.relative_to(directory).as_posix(): digest for path, digest in fingerprints.items()
+                if path.is_relative_to(directory)}
+    return hashlib.sha256(json.dumps(manifest, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 async def archive_reconciliation(settings: Settings, project: Project) -> dict[str, Any]:
     """A mismatch blocks cleanup instead of silently losing archive-only data."""
     directory = _project_directory(settings, project.slug, legacy=True)
+    async with get_session() as session:
+        imported = await session.get(LegacyImportRecord, project.slug)
+        if imported is not None:
+            fingerprints = await asyncio.to_thread(_legacy_file_fingerprints, directory)
+            verified = _legacy_manifest_digest(directory, fingerprints) == imported.source_digest
+            table = SQLModel.metadata.tables["messages"]
+            count = await session.scalar(sa_select(func.count()).select_from(table).where(table.c.project_id == project.id))
+            return {"project_id": project.id, "legacy_messages": imported.message_count,
+                    "database_messages": count or 0, "mismatched_ids": [], "safe": verified,
+                    "migration_verified": verified, "legacy_source_changed": not verified}
     copies = await asyncio.to_thread(_legacy_messages, directory)
     table = SQLModel.metadata.tables["messages"]
     recipients = SQLModel.metadata.tables["message_recipients"]
@@ -248,7 +285,33 @@ def _remove_mailbox_directory(directory: Path) -> None:
     shutil.rmtree(directory)
 
 
-async def purge_mailbox(settings: Settings, project_id: int, *, now: datetime | None = None) -> bool:
+async def hard_delete_mailbox(settings: Settings, project_id: int) -> None:
+    """Reclaim an explicitly confirmed, authenticated mailbox through the same fences.
+
+    Callers must authenticate and obtain irreversible-deletion confirmation first.
+    Only the recycle-bin waiting period is bypassed, never ownership or references.
+    """
+    async with get_session() as session:
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise ValueError("Project has no database identity")
+    if project.mailbox_state == "active":
+        if project.mailbox_type == "permanent":
+            await configure_mailbox(project_id, mailbox_type="temporary")
+        await configure_mailbox(project_id, action="trash")
+    try:
+        if not await purge_mailbox(settings, project_id, force=True):
+            raise ValueError("Mailbox changed during cleanup; no successful deletion was confirmed")
+    except Exception as exc:
+        async with get_session() as session:
+            pending = await session.get(Project, project_id)
+            if pending is not None:
+                pending.cleanup_error = str(exc)
+                await session.commit()
+        raise ValueError(f"Mailbox cleanup paused: {exc}") from exc
+
+
+async def purge_mailbox(settings: Settings, project_id: int, *, now: datetime | None = None, force: bool = False) -> bool:
     """Claim, drain writers, reclaim files, then transactionally delete owned rows.
 
     A failure leaves the project in purging state for retry. The shared legacy
@@ -260,7 +323,7 @@ async def purge_mailbox(settings: Settings, project_id: int, *, now: datetime | 
         if project is None or project.mailbox_type != "temporary":
             return False
         if project.mailbox_state != "purging" and (
-            project.mailbox_state != "trash" or project.purge_after is None or project.purge_after > now
+            project.mailbox_state != "trash" or project.purge_after is None or (not force and project.purge_after > now)
         ):
             return False
         slug = project.slug
@@ -288,6 +351,12 @@ async def purge_mailbox(settings: Settings, project_id: int, *, now: datetime | 
             await session.execute(text("BEGIN IMMEDIATE"))
             human_keys = list((await session.scalars(select(Project.human_key))).all())
             await asyncio.to_thread(_protect_source_directories, directory, human_keys)
+            database_url = make_url(settings.database.url)
+            if database_url.get_backend_name() == "sqlite" and database_url.database not in (None, "", ":memory:"):
+                from .share import resolve_sqlite_database_path
+
+                if resolve_sqlite_database_path(settings.database.url).is_relative_to(directory.resolve()):
+                    raise ValueError("Ownership database lies inside the mailbox cleanup target")
             agents = tables["agents"]
             external_authorship = await session.scalar(select(messages.c.id).where(
                 messages.c.project_id != project_id,
@@ -308,7 +377,7 @@ async def purge_mailbox(settings: Settings, project_id: int, *, now: datetime | 
                     cast(Any, Project.id) == project_id,
                     cast(Any, Project.mailbox_type) == "temporary",
                     cast(Any, Project.mailbox_state) == "trash",
-                    cast(Any, Project.purge_after) <= now,
+                    true() if force else cast(Any, Project.purge_after) <= now,
                 ).values(mailbox_state="purging", cleanup_error=None))
                 if getattr(result, "rowcount", 0) != 1:
                     return False

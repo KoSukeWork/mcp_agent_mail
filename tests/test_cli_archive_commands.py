@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,43 +70,6 @@ def test_archive_states_dir_prefers_inner_git_repo_over_outer_pyproject(isolated
     archive_dir = cli_module._archive_states_dir(create=False)
 
     assert archive_dir == repo.resolve() / cli_module.ARCHIVE_DIR_NAME
-
-
-def test_detect_git_head_supports_git_worktrees(isolated_env, tmp_path):
-    """_detect_git_head should resolve worktree .git files, not just .git directories."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=str(repo), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo), check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo), check=True)
-    (repo / "README.md").write_text("hello\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=str(repo), check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "initial"],
-        cwd=str(repo),
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    worktree = tmp_path / "repo-worktree"
-    subprocess.run(
-        ["git", "worktree", "add", str(worktree)],
-        cwd=str(repo),
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    expected_head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=str(worktree),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-    assert cli_module._detect_git_head(worktree) == expected_head
 
 
 # ============================================================================
@@ -448,7 +412,13 @@ def test_archive_restore_rolls_back_on_copy_failure(isolated_env, tmp_path, monk
 
     live_db = tmp_path / "live" / "mailbox.sqlite3"
     live_db.parent.mkdir(parents=True, exist_ok=True)
-    live_db.write_bytes(b"original-db")
+    connection = sqlite3.connect(live_db)
+    try:
+        connection.execute("CREATE TABLE projects (human_key TEXT NOT NULL)")
+        connection.commit()
+    finally:
+        connection.close()
+    original_database = live_db.read_bytes()
 
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
@@ -459,7 +429,10 @@ def test_archive_restore_rolls_back_on_copy_failure(isolated_env, tmp_path, monk
     monkeypatch.setattr(
         cli_module,
         "get_settings",
-        lambda: SimpleNamespace(storage=SimpleNamespace(root=str(storage_root))),
+        lambda: SimpleNamespace(
+            storage=SimpleNamespace(root=str(storage_root)),
+            database=SimpleNamespace(url=f"sqlite+aiosqlite:///{live_db.as_posix()}"),
+        ),
     )
 
     real_copytree = cli_module.shutil.copytree
@@ -479,7 +452,7 @@ def test_archive_restore_rolls_back_on_copy_failure(isolated_env, tmp_path, monk
     assert result.exit_code != 0
     assert "Restore failed:" in stdout
     assert "Original database and storage were restored from backups." in stdout
-    assert live_db.read_bytes() == b"original-db"
+    assert live_db.read_bytes() == original_database
     assert (storage_root / "README.txt").read_text(encoding="utf-8") == "original-storage"
 
 

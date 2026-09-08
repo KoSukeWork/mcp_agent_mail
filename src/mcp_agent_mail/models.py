@@ -54,6 +54,19 @@ class MailboxEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow_naive, index=True)
 
 
+class LegacyImportRecord(SQLModel, table=True):
+    """Retain a source digest after mailbox deletion so an old archive cannot resurrect it.
+
+    Deliberately has no project foreign key and contains no message content or credentials.
+    """
+
+    __tablename__ = "legacy_import_records"
+    project_slug: str = Field(primary_key=True, max_length=255)
+    source_digest: str = Field(max_length=64)
+    message_count: int = Field(default=0)
+    completed_at: datetime = Field(default_factory=_utcnow_naive)
+
+
 class Product(SQLModel, table=True):
     """Logical grouping across multiple repositories for product-wide inbox/search and threads."""
 

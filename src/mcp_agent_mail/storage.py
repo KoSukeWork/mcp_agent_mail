@@ -1350,13 +1350,16 @@ def collect_lock_status(settings: Settings, project_slug: str | None = None) -> 
 
     root = Path(settings.storage.root).expanduser().resolve()
     if project_slug:
-        root = root / "projects" / project_slug
+        root = root / "mailboxes" / project_slug
     locks: list[dict[str, Any]] = []
     summary = {"total": 0, "active": 0, "stale": 0, "metadata_missing": 0}
 
     if root.exists():
         now = time.time()
         for lock_path in sorted(root.rglob("*.lock"), key=lambda p: str(p)):
+            relative = lock_path.relative_to(root)
+            if ".git" in relative.parts or (not project_slug and relative.parts[0] == "projects"):
+                continue
             metadata_path = lock_path.parent / f"{lock_path.name}.owner.json"
             if not lock_path.exists():
                 continue

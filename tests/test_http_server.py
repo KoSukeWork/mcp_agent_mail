@@ -14,9 +14,9 @@ Reference: mcp_agent_mail-9z6
 from __future__ import annotations
 
 import contextlib
-import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -26,7 +26,7 @@ from mcp_agent_mail import config as _config
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import ensure_schema
 from mcp_agent_mail.http import _collect_retention_quota_report, build_http_app
-from mcp_agent_mail.storage import ensure_archive
+from mcp_agent_mail.storage import ensure_mailbox_storage
 
 
 def _rpc(method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -121,29 +121,55 @@ class TestServerConfiguration:
         assert report["per_project_attach"]["backend"] == 1024
 
     @pytest.mark.asyncio
-    async def test_retention_quota_report_scans_project_archive_layout(self, isolated_env):
-        """Quota scans should read STORAGE_ROOT/projects/<slug>, not STORAGE_ROOT/<slug>."""
+    async def test_retention_quota_report_uses_database_and_managed_attachments(self, isolated_env):
+        """Legacy copies are not authoritative message, inbox, or managed quota data."""
+        from mcp_agent_mail.db import get_session
+        from mcp_agent_mail.models import Agent, Message, MessageRecipient, Project
+
         settings = _config.get_settings()
-        archive = await ensure_archive(settings, "backend")
+        await ensure_schema()
+        async with get_session() as session:
+            project = Project(slug="backend", human_key="/software/backend")
+            session.add(project)
+            await session.flush()
+            assert project.id is not None
+            sender = Agent(project_id=project.id, name="BlueLake", program="test", model="test")
+            recipient = Agent(project_id=project.id, name="GreenHill", program="test", model="test")
+            session.add_all([sender, recipient])
+            await session.flush()
+            assert sender.id is not None and recipient.id is not None
+            message = Message(
+                project_id=project.id,
+                sender_id=sender.id,
+                subject="Quota",
+                body_md="Database only",
+                created_ts=datetime.now(timezone.utc).replace(tzinfo=None)
+                - timedelta(days=settings.retention_max_age_days + 1),
+            )
+            session.add(message)
+            await session.flush()
+            assert message.id is not None
+            session.add_all([
+                MessageRecipient(message_id=message.id, agent_id=agent_id, kind="to")
+                for agent_id in (sender.id, recipient.id)
+            ])
+            await session.commit()
 
-        message_path = archive.root / "messages" / "2026" / "04" / "retention-check.md"
-        message_path.parent.mkdir(parents=True, exist_ok=True)
-        message_path.write_text("message", encoding="utf-8")
-        old_ts = message_path.stat().st_mtime - (400 * 86400)
-        os.utime(message_path, (old_ts, old_ts))
-
-        inbox_path = archive.root / "agents" / "BlueLake" / "inbox" / "2026" / "04" / "msg.md"
-        inbox_path.parent.mkdir(parents=True, exist_ok=True)
-        inbox_path.write_text("inbox", encoding="utf-8")
+        archive = await ensure_mailbox_storage(settings, "backend")
+        legacy = Path(settings.storage.root) / "projects" / "preserved" / "attachments" / "old.webp"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(b"retained original")
 
         attachment_path = archive.root / "attachments" / "thumb.webp"
         attachment_path.parent.mkdir(parents=True, exist_ok=True)
         attachment_path.write_bytes(b"RIFFfakewebp")
 
         report = await _collect_retention_quota_report(settings)
-        assert report["old_messages"] >= 1
-        assert report["per_project_inbox_counts"]["backend"] >= 1
+        assert report["old_messages"] == 1
+        assert report["per_project_inbox_counts"]["backend"] == 2
         assert report["per_project_attach"]["backend"] == attachment_path.stat().st_size
+        assert report["total_attachments_bytes"] == attachment_path.stat().st_size
+        assert legacy.read_bytes() == b"retained original"
 
 
 # =============================================================================
@@ -531,7 +557,7 @@ class TestHTTPLockScope:
     """Regression tests for DB/archive lock ordering in HTTP routes."""
 
     @pytest.mark.asyncio
-    async def test_overseer_send_archives_after_db_session_closes(self, isolated_env, monkeypatch):
+    async def test_overseer_send_does_not_write_git_bundles(self, isolated_env, monkeypatch):
         import mcp_agent_mail.http as http_module
         import mcp_agent_mail.storage as storage_module
         from mcp_agent_mail.db import get_session as real_get_session
@@ -557,7 +583,6 @@ class TestHTTPLockScope:
 
         session_depth = 0
         archive_write_depths: list[int] = []
-        original_write_message_bundle = storage_module.write_message_bundle
         original_get_session = http_module.get_session
 
         @contextlib.asynccontextmanager
@@ -572,7 +597,7 @@ class TestHTTPLockScope:
 
         async def tracking_write_message_bundle(*args: Any, **kwargs: Any):
             archive_write_depths.append(session_depth)
-            return await original_write_message_bundle(*args, **kwargs)
+            raise AssertionError("Normal message delivery must not write legacy Git bundles")
 
         monkeypatch.setattr(http_module, "get_session", tracking_get_session)
         monkeypatch.setattr(storage_module, "write_message_bundle", tracking_write_message_bundle)
@@ -593,10 +618,11 @@ class TestHTTPLockScope:
             )
 
         assert response.status_code == 200
-        assert archive_write_depths == [0]
+        assert archive_write_depths == []
+        assert session_depth == 0
 
     @pytest.mark.asyncio
-    async def test_delete_messages_archives_after_db_session_closes(self, isolated_env, monkeypatch):
+    async def test_delete_messages_does_not_open_git(self, isolated_env, monkeypatch):
         import mcp_agent_mail.http as http_module
         from mcp_agent_mail.db import get_session as real_get_session
         from mcp_agent_mail.models import Agent, Message, MessageRecipient, Project
@@ -656,7 +682,6 @@ class TestHTTPLockScope:
         session_depth = 0
         archive_depths: list[int] = []
         original_get_session = http_module.get_session
-        original_ensure_archive = http_module.ensure_archive
 
         @contextlib.asynccontextmanager
         async def tracking_get_session(*args: Any, **kwargs: Any):
@@ -668,12 +693,12 @@ class TestHTTPLockScope:
                 finally:
                     session_depth -= 1
 
-        async def tracking_ensure_archive(*args: Any, **kwargs: Any):
+        def reject_git_open(*args: Any, **kwargs: Any):
             archive_depths.append(session_depth)
-            return await original_ensure_archive(*args, **kwargs)
+            raise AssertionError("Message deletion must not open the legacy Git repository")
 
         monkeypatch.setattr(http_module, "get_session", tracking_get_session)
-        monkeypatch.setattr(http_module, "ensure_archive", tracking_ensure_archive)
+        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", reject_git_open)
 
         settings = _config.get_settings()
         server = build_mcp_server()
@@ -688,10 +713,11 @@ class TestHTTPLockScope:
 
         assert response.status_code == 200
         assert response.json()["deleted_count"] == 1
-        assert archive_depths == [0]
+        assert archive_depths == []
+        assert session_depth == 0
 
     @pytest.mark.asyncio
-    async def test_inbox_delete_archives_after_db_session_closes(self, isolated_env, monkeypatch):
+    async def test_inbox_delete_does_not_open_git(self, isolated_env, monkeypatch):
         import mcp_agent_mail.http as http_module
         from mcp_agent_mail.db import get_session as real_get_session
         from mcp_agent_mail.models import Agent, Message, MessageRecipient, Project
@@ -751,7 +777,6 @@ class TestHTTPLockScope:
         session_depth = 0
         archive_depths: list[int] = []
         original_get_session = http_module.get_session
-        original_ensure_archive = http_module.ensure_archive
 
         @contextlib.asynccontextmanager
         async def tracking_get_session(*args: Any, **kwargs: Any):
@@ -763,12 +788,12 @@ class TestHTTPLockScope:
                 finally:
                     session_depth -= 1
 
-        async def tracking_ensure_archive(*args: Any, **kwargs: Any):
+        def reject_git_open(*args: Any, **kwargs: Any):
             archive_depths.append(session_depth)
-            return await original_ensure_archive(*args, **kwargs)
+            raise AssertionError("Message deletion must not open the legacy Git repository")
 
         monkeypatch.setattr(http_module, "get_session", tracking_get_session)
-        monkeypatch.setattr(http_module, "ensure_archive", tracking_ensure_archive)
+        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", reject_git_open)
 
         settings = _config.get_settings()
         server = build_mcp_server()
@@ -783,7 +808,8 @@ class TestHTTPLockScope:
 
         assert response.status_code == 200
         assert response.json()["deleted_count"] == 1
-        assert archive_depths == [0]
+        assert archive_depths == []
+        assert session_depth == 0
 
     @pytest.mark.asyncio
     async def test_ack_escalation_profile_archives_after_db_session_closes(self, isolated_env, monkeypatch):

@@ -12,7 +12,7 @@ import json
 import logging
 import re
 from collections.abc import MutableMapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
 
@@ -23,7 +23,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
+from sqlalchemy import DateTime, bindparam, text
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import select
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -56,7 +56,7 @@ from .storage import (
     ProjectArchive,
     archive_write_lock,
     collect_lock_status,
-    ensure_archive,
+    ensure_mailbox_storage,
     get_agent_communication_graph,
     get_archive_tree,
     get_commit_detail,
@@ -186,107 +186,6 @@ def _http_sender_identity(
     return sender_display, metadata
 
 
-_HTTP_MESSAGE_SUBJECT_SLUG_RE = re.compile(r"[^a-zA-Z0-9]+")
-
-
-def _coerce_http_archive_timestamp(created_ts_raw: Any) -> datetime:
-    try:
-        if isinstance(created_ts_raw, str):
-            text_value = (
-                created_ts_raw.replace("Z", "+00:00")
-                if created_ts_raw.endswith("Z")
-                else created_ts_raw
-            )
-            dt = datetime.fromisoformat(text_value)
-        else:
-            dt = created_ts_raw
-        if not isinstance(dt, datetime):
-            raise TypeError("created timestamp must be a datetime")
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:
-        return datetime.now(timezone.utc)
-
-
-def _build_http_archive_message_filename(created_ts_raw: Any, subject_raw: str, message_id: int) -> tuple[str, str, str]:
-    dt = _coerce_http_archive_timestamp(created_ts_raw)
-    y_dir = dt.strftime("%Y")
-    m_dir = dt.strftime("%m")
-    created_iso = dt.strftime("%Y-%m-%dT%H-%M-%SZ")
-    subject_slug = (
-        _HTTP_MESSAGE_SUBJECT_SLUG_RE.sub("-", subject_raw).strip("-_").lower()[:80]
-        or "message"
-    )
-    return y_dir, m_dir, f"{created_iso}__{subject_slug}__{message_id}.md"
-
-
-async def _delete_messages_from_archive(
-    *,
-    settings: Settings,
-    project_slug: str,
-    messages_to_delete: list[tuple[Any, ...]],
-    recip_map: dict[int, list[str]],
-    commit_message: str,
-) -> int:
-    archive = await ensure_archive(settings, project_slug)
-    git_paths_removed: list[str] = []
-    seen_git_paths: set[str] = set()
-
-    async with archive_write_lock(archive):
-        for mrow in messages_to_delete:
-            msg_id = int(mrow[0])
-            y_dir, m_dir, filename = _build_http_archive_message_filename(
-                mrow[1],
-                str(mrow[2] or ""),
-                msg_id,
-            )
-            sender_name = str(mrow[3] or "")
-
-            candidate_dirs = [
-                archive.root / "messages" / y_dir / m_dir,
-                archive.root / "agents" / sender_name / "outbox" / y_dir / m_dir,
-            ]
-            for recip_name in recip_map.get(msg_id, []):
-                candidate_dirs.append(
-                    archive.root / "agents" / recip_name / "inbox" / y_dir / m_dir
-                )
-
-            for cdir in candidate_dirs:
-                fpath = cdir / filename
-                rel = fpath.relative_to(archive.repo_root).as_posix()
-                try:
-                    await asyncio.to_thread(fpath.unlink)
-                except FileNotFoundError:
-                    continue
-                except OSError:
-                    continue
-                if rel not in seen_git_paths:
-                    seen_git_paths.add(rel)
-                    git_paths_removed.append(rel)
-
-        if git_paths_removed:
-            actor_module = importlib.import_module("git")
-            actor_cls = actor_module.Actor
-            git_actor = actor_cls(
-                settings.storage.git_author_name,
-                settings.storage.git_author_email,
-            )
-            await asyncio.to_thread(
-                archive.repo.index.remove,
-                git_paths_removed,
-                working_tree=False,
-            )
-            await asyncio.to_thread(
-                archive.repo.index.commit,
-                commit_message,
-                author=git_actor,
-                committer=git_actor,
-            )
-
-    return len(git_paths_removed)
-
-
 __all__ = ["build_http_app", "create_app", "main"]
 
 
@@ -332,65 +231,72 @@ async def _open_existing_project_archive(settings: Settings, slug: str) -> Proje
 
 
 def _collect_retention_quota_report_sync(settings: Settings) -> dict[str, Any]:
-    import datetime as _dt
     import fnmatch as _fnmatch
 
     storage_root = _expanduser_resolve_path(Path(settings.storage.root))
-    projects_root = storage_root / "projects"
-    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(
-        days=int(settings.retention_max_age_days)
-    )
-    old_messages = 0
+    projects_root = storage_root / "mailboxes"
     total_attach_bytes = 0
     per_project_attach: dict[str, int] = {}
-    per_project_inbox_counts: dict[str, int] = {}
     ignore_patterns = list(getattr(settings, "retention_ignore_project_patterns", []) or [])
 
     for proj_dir in projects_root.iterdir() if projects_root.exists() else []:
+        if proj_dir.is_symlink() or proj_dir.is_junction():
+            raise ValueError("Linked mailbox directories cannot be included in quota reporting")
         if not proj_dir.is_dir():
             continue
         proj_name = proj_dir.name
         if any(_fnmatch.fnmatch(proj_name, pat) for pat in ignore_patterns):
             continue
-        msg_root = proj_dir / "messages"
-        if msg_root.exists():
-            for ydir in msg_root.iterdir():
-                for mdir in ydir.iterdir() if ydir.is_dir() else []:
-                    for file_path in mdir.iterdir() if mdir.is_dir() else []:
-                        if file_path.suffix.lower() != ".md":
-                            continue
-                        with contextlib.suppress(Exception):
-                            ts = _dt.datetime.fromtimestamp(file_path.stat().st_mtime, _dt.timezone.utc)
-                            if ts < cutoff:
-                                old_messages += 1
-        inbox_root = proj_dir / "agents"
-        if inbox_root.exists():
-            count_inbox = 0
-            for inbox_file in inbox_root.rglob("inbox/*/*/*.md"):
-                with contextlib.suppress(Exception):
-                    if inbox_file.is_file():
-                        count_inbox += 1
-            per_project_inbox_counts[proj_name] = count_inbox
         att_root = proj_dir / "attachments"
+        if att_root.is_symlink() or att_root.is_junction():
+            raise ValueError("Linked attachment directories cannot be included in quota reporting")
         if att_root.exists():
-            for attachment_file in att_root.rglob("*.webp"):
-                with contextlib.suppress(Exception):
+            for attachment_file in att_root.rglob("*"):
+                if attachment_file.is_symlink() or attachment_file.is_junction():
+                    raise ValueError("Linked attachments cannot be included in quota reporting")
+                if not attachment_file.is_file():
+                    continue
+                try:
                     size_bytes = attachment_file.stat().st_size
-                    total_attach_bytes += size_bytes
-                    per_project_attach[proj_name] = per_project_attach.get(proj_name, 0) + size_bytes
+                except FileNotFoundError:
+                    continue  # A concurrently removed managed attachment is no longer counted.
+                total_attach_bytes += size_bytes
+                per_project_attach[proj_name] = per_project_attach.get(proj_name, 0) + size_bytes
 
     return {
-        "old_messages": old_messages,
+        "old_messages": 0,
         "retention_max_age_days": int(settings.retention_max_age_days),
         "total_attachments_bytes": total_attach_bytes,
         "quota_limit_bytes": int(settings.quota_attachments_limit_bytes),
         "per_project_attach": per_project_attach,
-        "per_project_inbox_counts": per_project_inbox_counts,
+        "per_project_inbox_counts": {},
     }
 
 
 async def _collect_retention_quota_report(settings: Settings) -> dict[str, Any]:
-    return await asyncio.to_thread(_collect_retention_quota_report_sync, settings)
+    import fnmatch
+
+    report = await asyncio.to_thread(_collect_retention_quota_report_sync, settings)
+    await ensure_schema()
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=settings.retention_max_age_days)
+    query = text("""
+        SELECT p.slug,
+               COUNT(DISTINCT CASE WHEN m.created_ts < :cutoff THEN m.id END) AS old_messages,
+               COUNT(mr.agent_id) AS inbox_count
+        FROM projects p
+        LEFT JOIN messages m ON m.project_id = p.id
+        LEFT JOIN message_recipients mr ON mr.message_id = m.id
+        GROUP BY p.id, p.slug
+    """).bindparams(bindparam("cutoff", type_=DateTime()))
+    async with get_session() as session:
+        rows = (await session.execute(query, {"cutoff": cutoff})).mappings().all()
+    for row in rows:
+        slug = str(row["slug"])
+        if any(fnmatch.fnmatch(slug, pattern) for pattern in settings.retention_ignore_project_patterns):
+            continue
+        report["old_messages"] += int(row["old_messages"])
+        report["per_project_inbox_counts"][slug] = int(row["inbox_count"])
+    return report
 
 
 def _collect_archive_guide_stats_sync(settings: Settings) -> dict[str, Any]:
@@ -1264,7 +1170,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                         # Also write JSON artifact to archive
                                         if not project_slug:
                                             raise ValueError(f"Project id {project_id} has no slug; cannot write archive artifacts.")
-                                        archive = await ensure_archive(settings, project_slug)
+                                        archive = await ensure_mailbox_storage(settings, project_slug)
                                         expires_at = now + _dt.timedelta(
                                             seconds=settings.ack_escalation_claim_ttl_seconds
                                         )
@@ -3262,18 +3168,19 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         async def delete_selected_messages(project: str, agent: str, request: Request) -> JSONResponse:
             """Permanently delete specific messages for an agent.
 
-            Removes messages from the SQLite database AND deletes the
-            corresponding markdown files from the Git archive so that
-            messages do not reappear after a refresh or server restart.
+            SQLite is authoritative. Original legacy archives are never rewritten.
             """
             await ensure_schema()
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                raise HTTPException(status_code=403, detail="Cross-site mailbox changes are not allowed")
 
             try:
                 request_body = await request.json()
-                message_ids: list[int] = request_body.get("message_ids", [])
-
-                if not message_ids:
-                    raise HTTPException(status_code=400, detail="No message IDs provided")
+                if not isinstance(request_body, dict):
+                    raise HTTPException(status_code=400, detail="Expected a JSON object")
+                message_ids = request_body.get("message_ids", [])
+                if not isinstance(message_ids, list) or not message_ids or any(type(mid) is not int or mid <= 0 for mid in message_ids):
+                    raise HTTPException(status_code=400, detail="Message IDs must be positive integers")
 
                 if len(message_ids) > 500:
                     raise HTTPException(
@@ -3282,13 +3189,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     )
 
                 deleted_count = 0
-                messages_to_delete: list[tuple[Any, ...]] = []
-                recip_map: dict[int, list[str]] = {}
                 async with get_session() as session:
-                    # Resolve project
+                    await session.execute(text("BEGIN IMMEDIATE"))
+                    # Resolve project and fence lifecycle transitions during deletion.
                     prow = (
                         await session.execute(
-                            text("SELECT id, slug, human_key FROM projects WHERE slug = :k OR human_key = :k"),
+                            text("SELECT id, slug, human_key, mailbox_state FROM projects WHERE slug = :k OR human_key = :k"),
                             {"k": project},
                         )
                     ).fetchone()
@@ -3297,6 +3203,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                     pid = int(prow[0])
                     project_slug = prow[1]
+                    if prow[3] != "active":
+                        raise HTTPException(status_code=409, detail="Restore the mailbox before deleting messages")
 
                     # Resolve agent
                     arow = (
@@ -3308,7 +3216,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     if not arow:
                         raise HTTPException(status_code=404, detail="Agent not found")
 
-                    # Fetch message metadata before deleting so we can locate Git files
+                    # Restrict recipient and reply cleanup to this project's messages.
                     placeholders = ','.join([f':mid{i}' for i in range(len(message_ids))])
                     id_params: dict[str, Any] = {"pid": pid}
                     id_params.update({f"mid{i}": mid for i, mid in enumerate(message_ids)})
@@ -3316,34 +3224,25 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     rows = await session.execute(
                         text(
                             f"""
-                            SELECT m.id, m.created_ts, m.subject, s.name AS sender_name
+                            SELECT m.id
                             FROM messages m
-                            JOIN agents s ON s.id = m.sender_id
                             WHERE m.project_id = :pid
                             AND m.id IN ({placeholders})
                             """
                         ),
                         id_params,
                     )
-                    messages_to_delete = [tuple(row) for row in rows.fetchall()]
+                    message_ids = [int(row[0]) for row in rows.fetchall()]
 
-                    if not messages_to_delete:
+                    if not message_ids:
                         return JSONResponse({"success": True, "deleted_count": 0})
 
-                    # Collect recipient names per message for inbox path removal
-                    recip_rows = await session.execute(
-                        text(
-                            f"""
-                            SELECT mr.message_id, a.name
-                            FROM message_recipients mr
-                            JOIN agents a ON a.id = mr.agent_id
-                            WHERE mr.message_id IN ({placeholders})
-                            """
-                        ),
+                    placeholders = ','.join(f':mid{i}' for i in range(len(message_ids)))
+                    id_params = {"pid": pid, **{f"mid{i}": mid for i, mid in enumerate(message_ids)}}
+                    await session.execute(
+                        text(f"UPDATE messages SET reply_to = NULL WHERE reply_to IN ({placeholders})"),
                         {f"mid{i}": mid for i, mid in enumerate(message_ids)},
                     )
-                    for rr in recip_rows.fetchall():
-                        recip_map.setdefault(int(rr[0]), []).append(rr[1])
 
                     # Delete from SQLite: recipients first, then messages
                     await session.execute(
@@ -3361,26 +3260,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     deleted_count = int(getattr(del_result, "rowcount", 0) or 0)
                     await session.commit()
 
-                settings = get_settings()
-                git_files_removed = 0
-                try:
-                    git_files_removed = await _delete_messages_from_archive(
-                        settings=settings,
-                        project_slug=project_slug,
-                        messages_to_delete=messages_to_delete,
-                        recip_map=recip_map,
-                        commit_message=f"delete: {deleted_count} message(s) via web UI\n",
-                    )
-                except Exception as archive_exc:
-                    # Archive operations are best-effort; DB deletion already happened.
-                    logging.getLogger(__name__).warning(
-                        "Git archive cleanup failed: %s", archive_exc
-                    )
-
                 return JSONResponse({
                     "success": True,
                     "deleted_count": deleted_count,
-                    "git_files_removed": git_files_removed,
                     "agent": agent,
                     "project": project_slug,
                 })
@@ -4007,7 +3889,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             # Should match safe slug pattern
             return bool(_SLUG_VALIDATOR_RE.match(slug))
 
-        @fastapi_app.get("/mail/archive/guide", response_class=HTMLResponse)
         async def archive_guide() -> HTMLResponse:
             """Display the archive access guide and overview."""
             settings = get_settings()
@@ -4028,7 +3909,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 projects=projects,
             )
 
-        @fastapi_app.get("/mail/archive/activity", response_class=HTMLResponse)
         async def archive_activity(limit: int = 50) -> HTMLResponse:
             """Display recent commits across all projects."""
             # Validate and cap limit to prevent DoS
@@ -4048,7 +3928,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 if repo is not None:
                     await asyncio.to_thread(repo.close)
 
-        @fastapi_app.get("/mail/archive/commit/{sha}", response_class=HTMLResponse)
         async def archive_commit(sha: str) -> HTMLResponse:
             """Display detailed commit information with diffs."""
             settings = get_settings()
@@ -4071,7 +3950,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 if repo is not None:
                     await asyncio.to_thread(repo.close)
 
-        @fastapi_app.get("/mail/archive/timeline", response_class=HTMLResponse)
         async def archive_timeline(project: str | None = None) -> HTMLResponse:
             """Display communication timeline with Mermaid.js visualization."""
             # Validate project slug if provided
@@ -4112,7 +3990,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 if repo is not None:
                     await asyncio.to_thread(repo.close)
 
-        @fastapi_app.get("/mail/archive/browser", response_class=HTMLResponse)
         async def archive_browser(project: str | None = None, path: str = "") -> HTMLResponse:
             """Browse archive files and directories."""
             if not project:
@@ -4135,7 +4012,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             finally:
                 await asyncio.to_thread(archive.repo.close)
 
-        @fastapi_app.get("/mail/archive/browser/{project}/file")
         async def archive_browser_file(project: str, path: str) -> JSONResponse:
             """Get file content from archive."""
             # Validate project slug
@@ -4164,7 +4040,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             except Exception as err:
                 raise HTTPException(status_code=404, detail="File not found") from err
 
-        @fastapi_app.get("/mail/archive/browser/{project}/download")
         async def archive_browser_download(project: str, path: str) -> Response:
             """Download a file from the archive as an attachment (#221)."""
             # Validate project slug
@@ -4201,7 +4076,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             except Exception as err:
                 raise HTTPException(status_code=404, detail="File not found") from err
 
-        @fastapi_app.get("/mail/archive/network", response_class=HTMLResponse)
         async def archive_network(project: str | None = None) -> HTMLResponse:
             """Display agent communication network graph."""
             # Validate project slug if provided
@@ -4268,7 +4142,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             return JSONResponse({"agents": agents})
 
-        @fastapi_app.get("/mail/archive/time-travel", response_class=HTMLResponse)
         async def archive_time_travel() -> HTMLResponse:
             """Display time-travel interface."""
             # Get all projects
@@ -4278,7 +4151,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             return await _render("archive_time_travel.html", projects=projects)
 
-        @fastapi_app.get("/mail/archive/time-travel/snapshot")
         async def archive_time_travel_snapshot(project: str, agent: str, timestamp: str) -> JSONResponse:
             """Get historical inbox snapshot."""
             # Validate project slug

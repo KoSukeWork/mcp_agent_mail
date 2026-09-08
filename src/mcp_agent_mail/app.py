@@ -16,7 +16,6 @@ import os
 import re
 import secrets
 import shlex
-import shutil
 import stat
 import subprocess
 import time
@@ -76,7 +75,6 @@ from .storage import (
     clear_repo_cache,
     collect_lock_status,
     emit_notification_signal,
-    ensure_archive,
     ensure_mailbox_storage,
     MailboxStorage,
     process_attachments,
@@ -2128,28 +2126,6 @@ def _canonicalize_project_identifier(identifier: str) -> str:
     return os.path.normpath(str(absolute_candidate))
 
 
-def _delete_tree_with_counts(root: Path) -> tuple[int, int]:
-    """Delete a directory tree and return the number of nested files/directories removed."""
-    if not root.exists():
-        return 0, 0
-    files_removed = 0
-    dirs_removed = 0
-    for item in root.rglob("*"):
-        if item.is_file():
-            files_removed += 1
-        elif item.is_dir():
-            dirs_removed += 1
-    shutil.rmtree(root)
-    return files_removed, dirs_removed
-
-
-def _delete_project_archive_tree(storage_root: str, project_slug: str) -> tuple[int, int]:
-    """Delete a project's archive subtree without blocking the event loop."""
-    archive_root = Path(storage_root).expanduser().resolve()
-    project_dir = archive_root / "projects" / project_slug
-    return _delete_tree_with_counts(project_dir)
-
-
 _VALID_IDENTITY_MODES = ("dir", "git-remote", "git-common-dir", "git-toplevel")
 
 
@@ -2520,7 +2496,7 @@ async def _list_project_agents(project: Project, limit: int = 10) -> list[str]:
         return [row[0] for row in result.all()]
 
 
-async def _get_project_by_identifier(identifier: str) -> Project:
+async def _get_project_by_identifier(identifier: str, *, allow_inactive: bool = False) -> Project:
     """Get project by identifier with helpful error messages and suggestions."""
     await ensure_schema()
 
@@ -2577,7 +2553,7 @@ async def _get_project_by_identifier(identifier: str) -> Project:
         )
         project = result.scalars().first()
         if project:
-            if project.mailbox_state != "active":
+            if not allow_inactive and project.mailbox_state != "active":
                 raise ToolExecutionError("MAILBOX_UNAVAILABLE", "Restore the mailbox from the recycle bin before use")
             return project
 
@@ -4622,101 +4598,6 @@ async def _list_outbox(
     return messages
 
 
-def _canonical_relpath_for_message(project: Project, message: Message, archive: ProjectArchive) -> str | None:
-    """Resolve the canonical repo-relative path for a message markdown file.
-
-    Supports both legacy filenames ("<id>.md") and the new descriptive pattern
-    ("<ISO>__<subject-slug>__<id>.md"). Returns a path relative to the archive
-    Git repo root, or None if no matching file is found.
-    """
-    ts = _ensure_utc(message.created_ts)
-    if ts is None:
-        return None
-    y = ts.strftime("%Y")
-    m = ts.strftime("%m")
-    project_root = archive.root
-    base_dir = project_root / "messages" / y / m
-    id_str = str(message.id)
-
-    candidates: list[Path] = []
-    try:
-        if base_dir.is_dir():
-            # New filename pattern with ISO + subject slug + id suffix
-            candidates.extend(base_dir.glob(f"*__*__{id_str}.md"))
-            # Legacy filename pattern (id only)
-            legacy = base_dir / f"{id_str}.md"
-            if legacy.exists():
-                candidates.append(legacy)
-    except Exception:
-        return None
-
-    if not candidates:
-        return None
-    # Prefer lexicographically last (ISO prefix sorts ascending)
-    selected = sorted(candidates)[-1]
-    try:
-        return selected.relative_to(archive.repo_root).as_posix()
-    except Exception:
-        return None
-
-
-async def _commit_info_for_message(settings: Settings, project: Project, message: Message) -> dict[str, Any] | None:
-    """Fetch commit metadata for the canonical message file (hexsha, summary, authored_ts, stats)."""
-    archive = await ensure_archive(settings, project.slug)
-    relpath = _canonical_relpath_for_message(project, message, archive)
-    if not relpath:
-        return None
-
-    def _lookup() -> dict[str, Any] | None:
-        try:
-            commit = next(archive.repo.iter_commits(paths=[relpath], max_count=1))
-        except StopIteration:
-            return None
-        data: dict[str, Any] = {
-            "hexsha": commit.hexsha[:12],
-            "summary": commit.summary,
-            "authored_ts": _iso(datetime.fromtimestamp(commit.authored_date, tz=timezone.utc)),
-        }
-        try:
-            stats = commit.stats.files.get(relpath, None)
-            if stats:
-                data["insertions"] = int(stats.get("insertions", 0))
-                data["deletions"] = int(stats.get("deletions", 0))
-        except Exception:
-            pass
-        # Attach concise diff summary (hunks count + first N +/- lines)
-        try:
-            parent = commit.parents[0] if commit.parents else None
-            hunks = 0
-            excerpt: list[str] = []
-            if parent is not None:
-                diffs = parent.diff(commit, paths=[relpath], create_patch=True)
-                for d in diffs:
-                    try:
-                        raw_diff = d.diff
-                        patch = raw_diff.decode("utf-8", "ignore") if isinstance(raw_diff, bytes) else str(raw_diff or "")
-                    except Exception:
-                        patch = ""
-                    for line in patch.splitlines():
-                        if line.startswith("@@"):
-                            hunks += 1
-                        if line.startswith("+") or line.startswith("-"):
-                            # skip file header lines like +++/---
-                            if line.startswith("+++") or line.startswith("---"):
-                                continue
-                            excerpt.append(line[:200])
-                            if len(excerpt) >= 12:
-                                break
-                    if len(excerpt) >= 12:
-                        break
-            data["diff_summary"] = {"hunks": hunks, "excerpt": excerpt}
-        except Exception:
-            pass
-        return data
-
-    return await asyncio.to_thread(_lookup)
-
-
 def _summarize_messages(messages: Sequence[tuple[Message, str]]) -> dict[str, Any]:
     participants: set[str] = set()
     key_points: list[str] = []
@@ -6494,21 +6375,6 @@ def build_mcp_server() -> FastMCP:
 
             await session.commit()
 
-        # Phase 2: Filesystem cleanup (non-transactional, best-effort)
-        files_removed = 0
-        dirs_removed = 0
-        fs_errors: list[str] = []
-        try:
-            settings = get_settings()
-            archive = await ensure_mailbox_storage(settings, project.slug)
-            agent_dir = archive.root / "agents" / agent_name
-            files_removed, dirs_removed = await asyncio.to_thread(_delete_tree_with_counts, agent_dir)
-        except Exception as exc:
-            fs_errors.append(f"Failed to remove agent archive directory: {exc}")
-
-        deleted_counts["archive_files_removed"] = files_removed
-        deleted_counts["archive_dirs_removed"] = dirs_removed
-
         summary_parts = [
             f"Hard-deleted agent '{agent_name}' from project '{project.human_key}'.",
             f"Database: {deleted_counts.get('messages_sent', 0)} messages, "
@@ -6516,18 +6382,15 @@ def build_mcp_server() -> FastMCP:
             f"{deleted_counts.get('file_reservations', 0)} file reservations, "
             f"{deleted_counts.get('agent_links', 0)} agent links, "
             f"{deleted_counts.get('window_identities', 0)} window identities removed.",
-            f"Filesystem: {files_removed} files and {dirs_removed} directories removed.",
+            "Legacy archives and filesystem artifacts are retained.",
         ]
-        if fs_errors:
-            summary_parts.append(f"Filesystem warnings: {'; '.join(fs_errors)}")
-
         await ctx.info(" ".join(summary_parts))
         return {
             "status": "hard_deleted",
             "agent_name": agent_name,
             "project_key": project_key,
             "deleted_counts": deleted_counts,
-            "filesystem_errors": fs_errors,
+            "legacy_archives_preserved": True,
         }
 
     @mcp.tool(
@@ -6547,7 +6410,10 @@ def build_mcp_server() -> FastMCP:
         confirmation: str,
         registration_token: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Permanently delete a project and all associated data. Requires confirmation='I UNDERSTAND'."""
+        """Reclaim database mailbox records and owned mailbox files; retain legacy archives and source repositories.
+
+        Requires confirmation='I UNDERSTAND' and a valid project agent token.
+        """
         if confirmation != "I UNDERSTAND":
             raise ValueError(
                 "Hard delete requires the confirmation parameter to be exactly 'I UNDERSTAND' (case-sensitive). "
@@ -6555,176 +6421,16 @@ def build_mcp_server() -> FastMCP:
                 "project will be permanently destroyed."
             )
 
-        project = await _get_project_by_identifier(project_key)
-        if not project:
-            raise ValueError(f"Project '{project_key}' not found")
+        project = await _get_project_by_identifier(project_key, allow_inactive=True)
+        await _authenticate_project_admin(ctx, project, registration_token, action="hard_delete_project")
+        if project.id is None:
+            raise ValueError("Project has no database identity")
+        from .lifecycle import hard_delete_mailbox
 
-        project_id = project.id
-        project_slug = project.slug
-        project_human_key = project.human_key
-
-        await _authenticate_project_admin(
-            ctx,
-            project,
-            registration_token,
-            action="hard_delete_project",
-        )
-
-        deleted_counts: dict[str, int] = {}
-
-        # Phase 1: Database cleanup in a single transaction
-        # Order matters: delete from leaf tables first to respect foreign key constraints
-        async with get_session() as session:
-            # Collect all agent IDs in this project
-            agent_rows = await session.execute(
-                select(Agent).where(cast(Any, Agent.project_id) == project_id)
-            )
-            agents = agent_rows.scalars().all()
-            agent_ids = [a.id for a in agents]
-            deleted_counts["agents"] = len(agents)
-
-            # Collect all message IDs in this project
-            msg_rows = await session.execute(
-                select(Message).where(cast(Any, Message.project_id) == project_id)
-            )
-            messages = msg_rows.scalars().all()
-            message_ids = [m.id for m in messages]
-            deleted_counts["messages"] = len(messages)
-
-            # Delete message recipients for all project messages
-            if message_ids:
-                mr_rows = await session.execute(
-                    select(MessageRecipient).where(
-                        cast(Any, MessageRecipient.message_id).in_(message_ids)
-                    )
-                )
-                mrs = mr_rows.scalars().all()
-                deleted_counts["message_recipients"] = len(mrs)
-                for mr in mrs:
-                    await session.delete(mr)
-
-            # Delete all messages (FTS cleanup handled by DB trigger)
-            for msg in messages:
-                await session.delete(msg)
-
-            # Delete file reservations
-            fr_rows = await session.execute(
-                select(FileReservation).where(cast(Any, FileReservation.project_id) == project_id)
-            )
-            frs = fr_rows.scalars().all()
-            deleted_counts["file_reservations"] = len(frs)
-            for fr in frs:
-                await session.delete(fr)
-
-            # Delete agent links involving any agent in this project
-            if agent_ids:
-                link_rows = await session.execute(
-                    select(AgentLink).where(
-                        or_(
-                            cast(Any, AgentLink.a_agent_id).in_(agent_ids),
-                            cast(Any, AgentLink.b_agent_id).in_(agent_ids),
-                        )
-                    )
-                )
-                links = link_rows.scalars().all()
-                deleted_counts["agent_links"] = len(links)
-                for link in links:
-                    await session.delete(link)
-
-            # Delete window identities
-            wi_rows = await session.execute(
-                select(WindowIdentity).where(cast(Any, WindowIdentity.project_id) == project_id)
-            )
-            wis = wi_rows.scalars().all()
-            deleted_counts["window_identities"] = len(wis)
-            for wi in wis:
-                await session.delete(wi)
-
-            # Delete message summaries
-            ms_rows = await session.execute(
-                select(MessageSummary).where(cast(Any, MessageSummary.project_id) == project_id)
-            )
-            summaries = ms_rows.scalars().all()
-            deleted_counts["message_summaries"] = len(summaries)
-            for ms in summaries:
-                await session.delete(ms)
-
-            # Delete sibling suggestions involving this project
-            ss_rows = await session.execute(
-                select(ProjectSiblingSuggestion).where(
-                    or_(
-                        cast(Any, ProjectSiblingSuggestion.project_a_id) == project_id,
-                        cast(Any, ProjectSiblingSuggestion.project_b_id) == project_id,
-                    )
-                )
-            )
-            suggestions = ss_rows.scalars().all()
-            deleted_counts["sibling_suggestions"] = len(suggestions)
-            for ss in suggestions:
-                await session.delete(ss)
-
-            # Delete product-project links
-            ppl_rows = await session.execute(
-                select(ProductProjectLink).where(cast(Any, ProductProjectLink.project_id) == project_id)
-            )
-            ppls = ppl_rows.scalars().all()
-            deleted_counts["product_links"] = len(ppls)
-            for ppl in ppls:
-                await session.delete(ppl)
-
-            # Delete all agents
-            for agent in agents:
-                await session.delete(agent)
-
-            # Delete the project itself
-            db_project = await session.get(Project, project_id)
-            if db_project:
-                await session.delete(db_project)
-                deleted_counts["project"] = 1
-
-            await session.commit()
-
-        # Phase 2: Filesystem cleanup (non-transactional, best-effort)
-        files_removed = 0
-        dirs_removed = 0
-        fs_errors: list[str] = []
-        try:
-            settings = get_settings()
-            files_removed, dirs_removed = await asyncio.to_thread(
-                _delete_project_archive_tree,
-                settings.storage.root,
-                project_slug,
-            )
-        except Exception as exc:
-            fs_errors.append(f"Failed to remove project archive directory: {exc}")
-
-        deleted_counts["archive_files_removed"] = files_removed
-        deleted_counts["archive_dirs_removed"] = dirs_removed
-
-        summary_parts = [
-            f"Hard-deleted project '{project_human_key}' (slug: {project_slug}).",
-            f"Database: {deleted_counts.get('agents', 0)} agents, "
-            f"{deleted_counts.get('messages', 0)} messages, "
-            f"{deleted_counts.get('message_recipients', 0)} recipient records, "
-            f"{deleted_counts.get('file_reservations', 0)} file reservations, "
-            f"{deleted_counts.get('agent_links', 0)} agent links, "
-            f"{deleted_counts.get('window_identities', 0)} window identities, "
-            f"{deleted_counts.get('message_summaries', 0)} message summaries, "
-            f"{deleted_counts.get('sibling_suggestions', 0)} sibling suggestions, "
-            f"{deleted_counts.get('product_links', 0)} product links removed.",
-            f"Filesystem: {files_removed} files and {dirs_removed} directories removed.",
-        ]
-        if fs_errors:
-            summary_parts.append(f"Filesystem warnings: {'; '.join(fs_errors)}")
-
-        await ctx.info(" ".join(summary_parts))
-        return {
-            "status": "hard_deleted",
-            "project_key": project_key,
-            "slug": project_slug,
-            "deleted_counts": deleted_counts,
-            "filesystem_errors": fs_errors,
-        }
+        await hard_delete_mailbox(get_settings(), project.id)
+        await ctx.info(f"Hard-deleted mailbox '{project.slug}'; source repositories and legacy archives retained.")
+        return {"status": "hard_deleted", "project_key": project_key, "slug": project.slug,
+                "legacy_archives_preserved": True}
 
     @mcp.tool(name="whois")
     @_instrument_tool("whois", cluster=CLUSTER_IDENTITY, capabilities={"identity", "audit"}, project_arg="project_key", agent_arg="agent_name")

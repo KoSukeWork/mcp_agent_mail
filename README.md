@@ -6,7 +6,7 @@
 
 A mail-like coordination layer for coding agents, exposed as an HTTP-only FastMCP server. It gives agents memorable identities, an inbox/outbox, searchable message history, and voluntary file reservation "leases" to avoid stepping on each other.
 
-Think of it as asynchronous email + directory + change-intent signaling for your agents, with SQLite as the authoritative mailbox store. Normal messaging no longer writes or requires a Git archive.
+Think of it as asynchronous email + directory + change-intent signaling for your agents, with SQLite as the authoritative mailbox store. Messaging, activity, deletion, lifecycle management, and retention reporting no longer write or require a Git archive. Git remains a source-control and source-repository Guard concern; retained mailbox archives are read-only migration inputs.
 
 **Mailbox lifecycle:** The homepage's existing **Your Projects** section (`/mail#projects`) directly groups permanent mailboxes, temporary mailboxes (30-day inactivity by default), and a 7-day recycle bin. Category buttons filter the cards in place, below the unified inbox. Cards include retention, conversion, and restore controls; no separate project-list or management page is required. Existing projects remain permanent. New managed files live under `STORAGE_ROOT/mailboxes/`; legacy `projects/` archives and Git history are retained separately. Older Git-centric sections below describe the legacy archive tooling, not the current message persistence path. See the [upgrade and acceptance guide](docs/planning/MAILBOX_LIFECYCLE_PLAN.md#upgrade-and-acceptance-guide) before upgrading, particularly if file-reservation guards are installed.
 
@@ -759,7 +759,7 @@ uv run python -m mcp_agent_mail.cli doctor check --json
 
 | Check | Status | Description |
 |-------|--------|-------------|
-| Locks | OK/WARN | Detects stale archive and commit locks from crashed processes |
+| Locks | OK/WARN | Reports managed mailbox locks; retained legacy Git locks are not modified |
 | Database | OK/ERROR | Runs `PRAGMA integrity_check` for SQLite corruption |
 | Orphaned Records | OK/WARN | Finds message recipients without corresponding agents |
 | FTS Index | OK/WARN | Compares message count vs FTS index entries |
@@ -784,101 +784,39 @@ WAL Files     OK        No orphan WAL/SHM files
 All checks passed!
 ```
 
-### Semi-automatic repair
+### Database backup and retained legacy import
 
-The repair command uses a **semi-automatic approach**:
-- **Safe repairs** (locks, expired reservations) are applied automatically
-- **Data-affecting repairs** (orphan cleanup) require confirmation
-- A **backup is created before any changes**
+`doctor repair`, `doctor backups`, `doctor restore`, and `projects adopt` are retired. The old `/mail/archive/*` browser routes are also unavailable. Use `/mail/activity` for database-backed activity and the homepage's existing project cards for mailbox management.
 
 ```bash
-# Preview what would be repaired (dry-run)
-uv run python -m mcp_agent_mail.cli doctor repair --dry-run
+# Read-only validation / transactional dry run; does not overwrite legacy files
+uv run python -m mcp_agent_mail.cli archive import-legacy
 
-# Run repairs with prompts for data changes
-uv run python -m mcp_agent_mail.cli doctor repair
+# Back up first, then commit a validated import
+uv run python -m mcp_agent_mail.cli archive import-legacy --apply
 
-# Auto-confirm all repairs (for automation)
-uv run python -m mcp_agent_mail.cli doctor repair --yes
+# Non-Git database/storage ZIP backups
+uv run python -m mcp_agent_mail.cli archive save
+uv run python -m mcp_agent_mail.cli archive list
 
-# Specify custom backup location
-uv run python -m mcp_agent_mail.cli doctor repair --backup-dir /path/to/backups
+# Inspect a ZIP restore before confirming any replacement
+uv run python -m mcp_agent_mail.cli archive restore /path/to/mailbox-state.zip --dry-run
 ```
 
-**Repair workflow:**
+Import preserves original message IDs and existing identities/read/ack state. Unknown projects, conflicting content, unmatched inbox copies, links, and history-only files stop the import for explicit reconciliation; they are not guessed or overwritten. Empty legacy directories are reported separately and do not become new mailboxes.
 
-1. **Create backup** — Git bundle + SQLite copy created before any changes
-2. **Safe repairs** (auto-applied):
-   - Heal stale locks (removes orphaned `.archive.lock`, `.commit.lock` files)
-   - Release expired file reservations (marks `released_ts` in database)
-3. **Data repairs** (require confirmation):
-   - Delete orphaned message recipients
-   - Rebuild FTS index (if needed)
+Successful imports record a SHA-256 source manifest in `legacy_import_records`. This content-free ledger survives individual mailbox purges: an unchanged source is skipped rather than resurrecting deleted messages. A changed source blocks re-import and cleanup until reconciled. A full database reset also resets this ledger; no automatic import runs at startup.
 
-### Backup management
+ZIP backups contain a consistent SQLite snapshot and storage files, not `.git` or Git bundles. Existing ZIPs are never overwritten; new backups use owner-only permissions on POSIX. The `archive` scrub preset preserves credentials, so keep backups private. Import leaves original archives, Git history, and external backups unchanged.
 
-Doctor creates timestamped backups before repairs. You can also manage backups directly:
+Restore retains pre-restore copies and checks source ownership and linked paths before replacement. Its database target must be outside the storage root. `--force` only skips confirmation, not those safety checks. Reset removes only the SQLite database/sidecars and `STORAGE_ROOT/mailboxes/`; it preserves `projects/`, `.git`, backups, unrelated files, and registered source directories. The database must not be inside managed mailbox storage.
 
-```bash
-# List all available backups
-uv run python -m mcp_agent_mail.cli doctor backups
-
-# JSON output for scripting
-uv run python -m mcp_agent_mail.cli doctor backups --json
-```
-
-**Backup contents:**
-
-Each backup includes:
-- `database.sqlite3` — Complete SQLite database copy
-- `database.sqlite3-wal`, `database.sqlite3-shm` — WAL files if present
-- `archive.bundle` or `{project}.bundle` — Git bundle of the archive repository
-- `manifest.json` — Metadata: when created, why, what's included, restore instructions
-
-**Directory structure:**
-
-```
-{storage_root}/backups/
-  2026-01-06T12-30-45_doctor-repair/
-    manifest.json
-    database.sqlite3
-    archive.bundle
-```
-
-### Restore from backup
-
-If something goes wrong, restore from any backup:
-
-```bash
-# Preview what would be restored
-uv run python -m mcp_agent_mail.cli doctor restore /path/to/backup --dry-run
-
-# Restore (prompts for confirmation)
-uv run python -m mcp_agent_mail.cli doctor restore /path/to/backup
-
-# Skip confirmation prompt
-uv run python -m mcp_agent_mail.cli doctor restore /path/to/backup --yes
-```
-
-**Restore process:**
-
-1. Validates backup manifest exists and is readable
-2. Shows backup metadata (creation time, reason, contents)
-3. **Creates a pre-restore backup** of current state (safety net)
-4. Restores SQLite database from backup
-5. Restores Git archive from bundle
-6. Reports any errors encountered
-
-**Safety features:**
-
-- Current database saved as `*.sqlite3.pre-restore` before overwrite
-- Current archive saved as `*.pre-restore` directory before overwrite
-- Errors during restore are captured and reported
+Project hard deletion likewise uses lifecycle cleanup: authentication and explicit confirmation are required, and only the seven-day wait is bypassed. Source protection, shared references, archive reconciliation, and write fencing still apply. Neither hard deletion nor message deletion rewrites the retained originals or promises secure erasure of old backups.
 
 ### Best practices
 
 1. **Run diagnostics regularly**: `am doctor check` is fast and non-destructive
-2. **Review before repair**: Use `--dry-run` first to see what would change
+2. **Preview data changes**: `archive import-legacy` validates by default; ZIP restore supports `--dry-run`
 3. **Keep backups**: Don't delete old backups until you've verified the system is healthy
 4. **Automate checks**: Include `am doctor check --json` in your CI/monitoring for early warning
 
@@ -1854,21 +1792,9 @@ Example identity payload (resource):
 }
 ```
 
-## Adopt/Merge legacy projects (optional)
+## Retained legacy projects
 
-Consolidate legacy per-worktree projects into a canonical one (safe, explicit, and auditable).
-
-- Plan the merge (no changes):
-  - `mcp-agent-mail projects adopt <from> <to> --dry-run`
-- Apply the merge (moves artifacts and re-keys DB rows):
-  - `mcp-agent-mail projects adopt <from> <to> --apply`
-- Safeguards and behavior:
-  - Requires both projects be in the same repository (validated via `git-common-dir`).
-  - Moves archived Git artifacts from `projects/<old-slug>/…` to `projects/<new-slug>/…` while preserving history.
-  - Re-keys database rows (`agents`, `messages`, `file_reservations`) from source to target project.
-  - Records `aliases.json` under the target with `"former_slugs": [...]` for discoverability.
-  - Aborts if agent-name conflicts would break uniqueness in the target (fix names, then retry).
-  - Idempotent where possible; dry-run always prints a clear plan before apply.
+`projects adopt` is retired: mailbox consolidation must not move Git artifacts or rewrite retained originals. Use `archive import-legacy` for validation and `archive import-legacy --apply` for a backed-up database import. Unmatched projects require explicit reconciliation rather than automatic source-path or identity changes.
 
 ## Build slots and helpers (opt-in)
 
@@ -2283,7 +2209,7 @@ Output format (all tools/resources):
 | `health_check` | `health_check()` | `{status, environment, http_host, http_port, database_url}` | Lightweight readiness probe |
 | `ensure_project` | `ensure_project(human_key: str)` | `{id, slug, human_key, created_at}` | Idempotently creates/ensures project |
 | `register_agent` | `register_agent(project_key: str, program: str, model: str, name?: str, task_description?: str, attachments_policy?: str)` | Agent profile dict | Creates/updates agent; writes profile to Git |
-| `whois` | `whois(project_key: str, agent_name: str, include_recent_commits?: bool, commit_limit?: int)` | Agent profile dict | Enriched profile for one agent (optionally includes recent commits) |
+| `whois` | `whois(project_key: str, agent_name: str, include_recent_activity?: bool, activity_limit?: int)` | Agent profile dict | Enriched profile for one agent (optionally includes database-backed recent activity) |
 | `create_agent_identity` | `create_agent_identity(project_key: str, program: str, model: str, name_hint?: str, task_description?: str, attachments_policy?: str)` | Agent profile dict | Always creates a new unique agent |
 | `sweep_stale_agents` | `sweep_stale_agents(project_key: str, agent_name: str, threshold_seconds?: int, require_no_active_reservations?: bool, registration_token?: str)` | `{project_key, requested_by, threshold_seconds, retired[], retired_agents[], count}` | Authenticated project-scoped retirement; caller is excluded and active reservations block retirement by default |
 | `send_message` | `send_message(project_key: str, sender_name: str, to: list[str], subject: str, body_md: str, cc?: list[str], bcc?: list[str], attachment_paths?: list[str], convert_images?: bool, importance?: str, ack_required?: bool, thread_id?: str, auto_contact_if_blocked?: bool, sender_token?: str)` | `{deliveries: list, count: int, attachments?}` | Writes canonical + inbox/outbox, converts images. Non-absolute `attachment_paths` resolve relative to the project archive root. |

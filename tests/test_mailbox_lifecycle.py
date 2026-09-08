@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from mcp_agent_mail import storage
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.config import get_settings
+from mcp_agent_mail.config import clear_settings_cache, get_settings
 from mcp_agent_mail.db import ensure_schema, get_session
 from mcp_agent_mail.http import build_http_app
 from mcp_agent_mail.lifecycle import (
@@ -26,7 +26,7 @@ from mcp_agent_mail.lifecycle import (
     purge_mailbox,
     touch_project,
 )
-from mcp_agent_mail.models import Agent, FileReservation, Message, Project
+from mcp_agent_mail.models import Agent, FileReservation, Message, MessageRecipient, Project
 
 
 async def make_project(slug="sample"):
@@ -37,6 +37,58 @@ async def make_project(slug="sample"):
         await session.commit()
         await session.refresh(project)
         return project
+
+
+@pytest.mark.asyncio
+async def test_agent_inbox_deletion_is_database_only_and_project_scoped(isolated_env, monkeypatch):
+    calls = []
+
+    async def forbidden(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("Inbox deletion must not open Git")
+
+    monkeypatch.setattr(storage, "_ensure_repo", forbidden)
+    own = await make_project("own")
+    other = await make_project("other")
+    ids = []
+    reply_id = None
+    async with get_session() as session:
+        for project in (own, other):
+            agent = Agent(project_id=project.id, name="BlueLake", program="test", model="test")
+            session.add(agent)
+            await session.flush()
+            message = Message(project_id=project.id, sender_id=agent.id, subject="Original", body_md="Body")
+            session.add(message)
+            await session.flush()
+            session.add(MessageRecipient(message_id=message.id, agent_id=agent.id, kind="to"))
+            ids.append(message.id)
+            if project.id == own.id:
+                reply = Message(project_id=project.id, sender_id=agent.id, subject="Reply", body_md="Reply", reply_to=message.id)
+                session.add(reply)
+                await session.flush()
+                reply_id = reply.id
+        await session.commit()
+    legacy = Path(get_settings().storage.root) / "projects" / own.slug / "messages" / "original.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("retained original", encoding="utf-8")
+    async with AsyncClient(transport=ASGITransport(app=build_http_app(get_settings())), base_url="http://test") as http:
+        url = "/mail/own/inbox/BlueLake/delete-messages"
+        assert (await http.post(url, json={"message_ids": ids}, headers={"sec-fetch-site": "cross-site"})).status_code == 403
+        assert (await http.post(url, json=[])).status_code == 400
+        assert (await http.post(url, json={"message_ids": [True]})).status_code == 400
+        response = await http.post(url, json={"message_ids": ids})
+        assert response.status_code == 200, response.text
+        assert response.json()["deleted_count"] == 1
+        assert "git_files_removed" not in response.json()
+    async with get_session() as session:
+        assert await session.get(Message, ids[0]) is None
+        assert await session.get(Message, ids[1]) is not None
+        assert reply_id is not None
+        remaining_reply = await session.get(Message, reply_id)
+        assert remaining_reply is not None and remaining_reply.reply_to is None
+        assert await session.scalar(text("SELECT COUNT(*) FROM message_recipients WHERE message_id = :mid"), {"mid": ids[1]}) == 1
+    assert not calls
+    assert legacy.read_text(encoding="utf-8") == "retained original"
 
 
 @pytest.mark.asyncio
@@ -154,6 +206,8 @@ async def test_messaging_and_whois_do_not_open_git(isolated_env, monkeypatch):
         async with AsyncClient(transport=ASGITransport(app=build_http_app(get_settings())), base_url="http://test") as http:
             response = await http.post("/mail/api/delete-messages", json={"message_ids": [mid]})
             assert response.status_code == 409
+            response = await http.post("/mail/mailbox-test/inbox/BlueLake/delete-messages", json={"message_ids": [mid]})
+            assert response.status_code == 410
         async with get_session() as session:
             with pytest.raises(IntegrityError, match=r"[Mm]ailbox is unavailable"):
                 await session.execute(text(
@@ -242,7 +296,8 @@ async def test_cleanup_rejects_identifier_traversal(isolated_env, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_never_removes_a_registered_source_directory(isolated_env):
+@pytest.mark.parametrize("forced", [False, True])
+async def test_cleanup_never_removes_a_registered_source_directory(isolated_env, forced):
     project = await make_project()
     settings = get_settings()
     source = Path(settings.storage.root) / "mailboxes" / project.slug / "source"
@@ -256,8 +311,27 @@ async def test_cleanup_never_removes_a_registered_source_directory(isolated_env)
     await configure_mailbox(project.id, mailbox_type="temporary", now=now)
     await configure_mailbox(project.id, action="trash", now=now)
     with pytest.raises(ValueError, match="source repository"):
-        await purge_mailbox(settings, project.id, now=now + timedelta(days=7))
+        await purge_mailbox(settings, project.id, now=now if forced else now + timedelta(days=7), force=forced)
     assert file.read_text(encoding="utf-8") == "valuable_source = True\n"
+@pytest.mark.asyncio
+async def test_cleanup_never_removes_its_ownership_database(isolated_env, monkeypatch):
+    database = Path(get_settings().storage.root) / "mailboxes" / "sample" / "ownership.sqlite3"
+    database.parent.mkdir(parents=True)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database.as_posix()}")
+    clear_settings_cache()
+    project = await make_project()
+    other = await make_project("other")
+    with pytest.raises(ValueError, match="Ownership database"):
+        from mcp_agent_mail.lifecycle import hard_delete_mailbox
+
+        await hard_delete_mailbox(get_settings(), project.id)
+    assert database.is_file()
+    async with get_session() as session:
+        assert await session.get(Project, other.id) is not None
+        pending = await session.get(Project, project.id)
+        assert pending is not None and pending.mailbox_state == "trash" and pending.cleanup_error
+
+
 
 
 @pytest.mark.asyncio

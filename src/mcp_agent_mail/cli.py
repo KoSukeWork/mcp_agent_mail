@@ -69,11 +69,9 @@ from .models import (
     FileReservation,
     Message,
     MessageRecipient,
-    MessageSummary,
     Product,
     ProductProjectLink,
     Project,
-    ProjectSiblingSuggestion,
     WindowIdentity,
 )
 from .share import (
@@ -94,7 +92,7 @@ from .share import (
     sign_manifest,
     summarize_snapshot,
 )
-from .storage import archive_write_lock, ensure_archive
+from .storage import archive_write_lock, ensure_mailbox_storage
 from .utils import slugify
 
 # Suppress annoying bleach CSS sanitizer warning from dependencies
@@ -493,26 +491,6 @@ def _ensure_utc_dt(dt: Optional[datetime]) -> Optional[datetime]:
     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
-
-
-def _delete_project_archive_tree(storage_root: str, project_slug: str) -> tuple[int, int, list[str]]:
-    """Best-effort removal of a project's archive subtree."""
-    files_removed = 0
-    dirs_removed = 0
-    fs_errors: list[str] = []
-    try:
-        archive_root = Path(storage_root).expanduser().resolve()
-        project_dir = archive_root / "projects" / project_slug
-        if project_dir.exists():
-            for item in project_dir.rglob("*"):
-                if item.is_file():
-                    files_removed += 1
-                elif item.is_dir():
-                    dirs_removed += 1
-            shutil.rmtree(project_dir)
-    except Exception as exc:
-        fs_errors.append(str(exc))
-    return files_removed, dirs_removed, fs_errors
 
 
 @products_app.command("ensure")
@@ -1265,20 +1243,30 @@ def serve_stdio() -> None:
     # Enforce single-server ownership of the storage root (issue #123)
     _server_lock = _acquire_server_lock()
 
-    # Redirect all logging to stderr to avoid corrupting stdio transport
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        stream=sys.stderr,
-    )
-
-    # Print startup message to stderr (stdout is reserved for MCP protocol)
-    print("MCP Agent Mail - Starting stdio transport...", file=sys.stderr)
-
-    server = build_mcp_server()
-    server.run(transport="stdio")
+    # Temporarily redirect logging without retaining a caller's closed stderr
+    # after an embedded CLI invocation (including CliRunner) finishes.
+    previous_handlers = logging.root.handlers[:]
+    previous_level = logging.root.level
+    try:
+        for handler in previous_handlers:
+            logging.root.removeHandler(handler)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            stream=sys.stderr,
+        )
+        print("MCP Agent Mail - Starting stdio transport...", file=sys.stderr)
+        server = build_mcp_server()
+        server.run(transport="stdio")
+    finally:
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+            if handler not in previous_handlers:
+                handler.close()
+        for handler in previous_handlers:
+            logging.root.addHandler(handler)
+        logging.root.setLevel(previous_level)
+        _server_lock.release()
 
 
 def _run_command(command: list[str]) -> None:
@@ -2390,6 +2378,13 @@ def _resolve_path(raw_path: str | Path) -> Path:
     path = Path(raw_path).expanduser()
     path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
     return path
+def _assert_unlinked_data_path(raw_path: str | Path) -> None:
+    # Check before resolve() discards evidence of symlinks and Windows junctions.
+    path = Path(raw_path).expanduser().absolute()
+    if any(part.is_symlink() or part.is_junction() for part in (path, *path.parents)):
+        raise ValueError(f"Linked data targets are not allowed: {path}")
+
+
 
 
 @dataclass(slots=True)
@@ -2573,74 +2568,6 @@ def _format_bytes(value: int) -> str:
     return f"{int(value)} B"
 
 
-def _resolve_git_dir(repo_path: Path) -> Path | None:
-    git_entry = repo_path / ".git"
-    if git_entry.is_dir():
-        return git_entry
-    if not git_entry.is_file():
-        return None
-    try:
-        contents = git_entry.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not contents.lower().startswith("gitdir:"):
-        return None
-    git_dir_raw = contents.split(":", 1)[1].strip()
-    if not git_dir_raw:
-        return None
-    git_dir = Path(git_dir_raw)
-    if not git_dir.is_absolute():
-        git_dir = (repo_path / git_dir).resolve()
-    return git_dir
-
-
-def _resolve_common_git_dir(git_dir: Path) -> Path:
-    common_dir_file = git_dir / "commondir"
-    if not common_dir_file.exists():
-        return git_dir
-    try:
-        common_dir_raw = common_dir_file.read_text(encoding="utf-8").strip()
-    except OSError:
-        return git_dir
-    if not common_dir_raw:
-        return git_dir
-    common_dir = Path(common_dir_raw)
-    if not common_dir.is_absolute():
-        common_dir = (git_dir / common_dir).resolve()
-    return common_dir
-
-
-def _detect_git_head(repo_path: Path) -> str | None:
-    git_dir = _resolve_git_dir(repo_path)
-    if git_dir is None:
-        return None
-    common_git_dir = _resolve_common_git_dir(git_dir)
-    head_path = git_dir / "HEAD"
-    try:
-        head_contents = head_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not head_contents:
-        return None
-    if head_contents.startswith("ref:"):
-        ref_name = head_contents.split(" ", 1)[1].strip()
-        ref_path = common_git_dir / ref_name
-        if ref_path.exists():
-            with suppress(OSError):
-                return ref_path.read_text(encoding="utf-8").strip()
-        packed_refs = common_git_dir / "packed-refs"
-        if packed_refs.exists():
-            with suppress(OSError):
-                for line in packed_refs.read_text(encoding="utf-8").splitlines():
-                    if line.startswith("#") or not line.strip():
-                        continue
-                    commit, ref = line.split(" ", 1)
-                    if ref.strip() == ref_name:
-                        return commit.strip()
-        return None
-    return head_contents
-
-
 def _compose_archive_basename(
     *,
     timestamp: datetime,
@@ -2673,6 +2600,10 @@ def _write_directory_to_zip(zip_file: ZipFile, source_dir: Path, arc_prefix: Pat
     prefix = arc_prefix.as_posix().rstrip("/") + "/"
     zip_file.writestr(prefix, b"")
     for path in source_dir.rglob("*"):
+        if ".git" in path.relative_to(source_dir).parts:
+            continue
+        if path.is_symlink() or path.is_junction():
+            raise ShareExportError(f"Linked storage content cannot be backed up: {path}")
         arcname = (arc_prefix / path.relative_to(source_dir)).as_posix()
         if path.is_dir():
             zip_file.writestr(arcname.rstrip("/") + "/", b"")
@@ -2858,7 +2789,6 @@ def _create_mailbox_archive(
             },
             "storage": {
                 "source_path": str(storage_root),
-                "git_head": _detect_git_head(storage_root),
                 "archive_dir": ARCHIVE_STORAGE_DIRNAME.as_posix(),
             },
             "label": label or "",
@@ -2880,13 +2810,39 @@ def _create_mailbox_archive(
             archive.write(snapshot_path, arcname=ARCHIVE_SNAPSHOT_RELATIVE.as_posix())
             _write_directory_to_zip(archive, storage_root, ARCHIVE_STORAGE_DIRNAME)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(temp_zip_path), str(destination))
+        with temp_zip_path.open("rb") as source, open(
+            destination, "xb", opener=lambda path, flags: os.open(path, flags, 0o600),
+        ) as target:
+            shutil.copyfileobj(source, target)
     return destination, metadata
+
+
+@archive_app.command("import-legacy", help="Validate retained legacy mailbox files; --apply backs up and imports them into SQLite without changing the originals.")
+def archive_import_legacy(
+    apply: Annotated[bool, typer.Option("--apply", help="Back up first, then commit the validated import.")] = False,
+) -> None:
+    from .legacy_import import import_legacy_archive
+
+    settings = get_settings()
+    try:
+        # Preflight first, so a blocked import does not create unnecessary backups.
+        report = _run_async(import_legacy_archive(settings))
+        if apply:
+            archive_path, _metadata = _create_mailbox_archive(
+                project_filters=[], scrub_preset=DEFAULT_ARCHIVE_SCRUB_PRESET,
+                label="pre-legacy-import", status_message="Backing up before legacy import...",
+            )
+            report = _run_async(import_legacy_archive(settings, apply=True))
+            report["backup"] = str(archive_path)
+        console.print_json(data=report)
+    except (ValueError, ShareExportError, OSError, subprocess.CalledProcessError) as exc:
+        console.print(f"[red]Legacy import stopped without overwriting source data:[/] {exc}")
+        raise typer.Exit(code=1) from exc
 
 
 @archive_app.command(
     "save",
-    help="Create a lossless ZIP that captures the SQLite snapshot and storage repo (default preset keeps ack/read state).",
+    help="Create a ZIP of the SQLite snapshot and storage files, excluding Git internals (default preset keeps ack/read state).",
 )
 def archive_save_state(
     projects: Annotated[
@@ -3051,6 +3007,27 @@ def archive_restore_state(
         console.print(
             f"[yellow]Archive used storage root {archive_storage_path}, current config is {storage_root}. Continuing...[/]"
         )
+    try:
+        _assert_unlinked_data_path(settings.storage.root)
+        _assert_unlinked_data_path(make_url(settings.database.url).database or database_path)
+        for suffix in ("-wal", "-shm"):
+            _assert_unlinked_data_path(Path(f"{database_path}{suffix}"))
+        if database_path.is_relative_to(storage_root):
+            raise ValueError("Archive restore requires the database to be outside the storage root")
+        if storage_root.exists() and any(storage_root.iterdir()) and not database_path.exists():
+            raise ValueError("Cannot replace existing storage without its ownership database")
+        if database_path.exists():
+            connection = sqlite3.connect(f"{database_path.as_uri()}?mode=ro", uri=True)
+            try:
+                human_keys = [str(row[0]) for row in connection.execute("SELECT human_key FROM projects")]
+            finally:
+                connection.close()
+            from .lifecycle import _protect_source_directories
+
+            _protect_source_directories(storage_root, human_keys)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        console.print(f"[red]Cannot safely restore the mailbox backup: {exc}[/]")
+        raise typer.Exit(code=1) from exc
     with tempfile.TemporaryDirectory(prefix="mailbox-restore-") as temp_dir_str:
         temp_dir = Path(temp_dir_str)
         try:
@@ -3156,7 +3133,9 @@ def clear_and_reset_everything(
     ] = None,
 ) -> None:
     """
-    Delete the SQLite database (including WAL/SHM) and wipe all storage-root contents.
+    Reset the SQLite mailbox database and managed mailboxes directory. Stop the server first.
+
+    Legacy projects, Git history, backups and unrelated storage entries are retained.
     """
     settings = get_settings()
     db_url = settings.database.url
@@ -3166,6 +3145,11 @@ def clear_and_reset_everything(
         url = make_url(db_url)
         if url.get_backend_name().startswith("sqlite"):
             database = url.database or ""
+            if database == ":memory:" or url.query.get("mode") == "memory":
+                raise ValueError("Reset requires a file-backed SQLite ownership database")
+            _assert_unlinked_data_path(settings.storage.root)
+            if database:
+                _assert_unlinked_data_path(database)
             if not database:
                 console.print("[yellow]Warning:[/] SQLite database path is empty; nothing to delete.")
             else:
@@ -3174,9 +3158,36 @@ def clear_and_reset_everything(
                 database_files.append(Path(f"{db_path}-wal"))
                 database_files.append(Path(f"{db_path}-shm"))
     except Exception as exc:  # pragma: no cover - defensive
-        console.print(f"[red]Failed to parse database URL '{db_url}': {exc}[/]")
+        console.print(f"[red]Failed to inspect database location: {exc}[/]")
+        raise typer.Exit(code=1) from exc
 
     storage_root = _resolve_path(settings.storage.root)
+    managed_root = storage_root / "mailboxes"
+    try:
+        if not database_files:
+            raise ValueError("Reset requires a file-backed SQLite ownership database")
+        if database_files[0].is_relative_to(managed_root):
+            raise ValueError("Ownership database must be outside managed mailbox storage")
+        if any(path.is_symlink() or path.is_junction() for path in [managed_root, *database_files]):
+            raise ValueError("Linked reset targets are not allowed")
+        if any(database_files[0].is_relative_to(storage_root / name) for name in ("projects", ".git", "backups")):
+            raise ValueError("The database reset target lies inside preserved legacy storage")
+        if managed_root.exists() and not database_files[0].exists():
+            raise ValueError("Cannot reset managed storage without its ownership database")
+        human_keys: list[str] = []
+        if database_files[0].exists():
+            connection = sqlite3.connect(f"{database_files[0].as_uri()}?mode=ro", uri=True)
+            try:
+                if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='projects'").fetchone():
+                    human_keys = [str(row[0]) for row in connection.execute("SELECT human_key FROM projects")]
+            finally:
+                connection.close()
+        from .lifecycle import _protect_source_directories
+
+        _protect_source_directories(managed_root, human_keys)
+    except Exception as exc:
+        console.print(f"[red]Reset preflight failed: {exc}[/]")
+        raise typer.Exit(code=1) from exc
 
     if not force:
         console.print("[bold yellow]This will irreversibly delete:[/]")
@@ -3185,7 +3196,8 @@ def clear_and_reset_everything(
                 console.print(f"  • {path}")
         else:
             console.print("  • (no SQLite files detected)")
-        console.print(f"  • All contents inside {storage_root} (including .git)")
+        console.print(f"  • Managed mailbox files inside {managed_root}")
+        console.print("  Legacy projects, .git, backups and unrelated storage entries are retained.")
         console.print()
 
     archived_state: Path | None = None
@@ -3195,7 +3207,7 @@ def clear_and_reset_everything(
         if force:
             should_archive = True
         else:
-            should_archive = typer.confirm("Create a mailbox archive before wiping everything?", default=True)
+            should_archive = typer.confirm("Create a database mailbox backup before reset?", default=True)
     if should_archive:
         try:
             archived_state, _ = _create_mailbox_archive(
@@ -3218,6 +3230,18 @@ def clear_and_reset_everything(
     if not force and not typer.confirm("Proceed with destructive reset?", default=False):
         raise typer.Exit(code=1)
 
+    # Reclaim only managed storage, before removing its ownership database.
+    # Any error aborts visibly; never report a partial reset as successful.
+    reset_database_state()
+    deleted_storage: list[Path] = []
+    try:
+        if managed_root.exists():
+            shutil.rmtree(managed_root)
+            deleted_storage.append(managed_root)
+    except Exception as exc:
+        console.print(f"[red]Managed storage reset failed; database retained: {exc}[/]")
+        raise typer.Exit(code=1) from exc
+
     # Remove database files
     deleted_db_files: list[Path] = []
     for path in database_files:
@@ -3227,21 +3251,7 @@ def clear_and_reset_everything(
                 deleted_db_files.append(path)
         except Exception as exc:  # pragma: no cover - filesystem failures
             console.print(f"[red]Failed to delete {path}: {exc}[/]")
-
-    # Wipe storage root contents completely (including .git directory)
-    deleted_storage: list[Path] = []
-    if storage_root.exists():
-        for child in storage_root.iterdir():
-            try:
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-                deleted_storage.append(child)
-            except Exception as exc:  # pragma: no cover
-                console.print(f"[red]Failed to remove {child}: {exc}[/]")
-    else:
-        console.print(f"[yellow]Storage root {storage_root} does not exist; nothing to remove.[/]")
+            raise typer.Exit(code=1) from exc
 
     console.print("[green]✓ Reset complete.[/]")
     if deleted_db_files:
@@ -3402,28 +3412,8 @@ def hard_delete_agent(
 
             await session.commit()
 
-        # Phase 2: Filesystem cleanup (best-effort)
-        files_removed = 0
-        dirs_removed = 0
-        fs_errors: list[str] = []
-        try:
-            from .storage import ensure_archive
-
-            archive = await ensure_archive(settings, proj.slug)
-            agent_dir = archive.root / "agents" / agent_name
-            if agent_dir.exists():
-                for item in agent_dir.rglob("*"):
-                    if item.is_file():
-                        files_removed += 1
-                    elif item.is_dir():
-                        dirs_removed += 1
-                shutil.rmtree(agent_dir)
-        except Exception as exc:
-            fs_errors.append(str(exc))
-
-        deleted_counts["archive_files_removed"] = files_removed
-        deleted_counts["archive_dirs_removed"] = dirs_removed
-        return {"deleted_counts": deleted_counts, "fs_errors": fs_errors}
+        # Historical files remain offline; identity deletion is database-only.
+        return {"deleted_counts": deleted_counts}
 
     try:
         result = _run_async(_execute())
@@ -3432,7 +3422,6 @@ def hard_delete_agent(
         raise typer.Exit(code=1) from exc
 
     counts = result["deleted_counts"]
-    fs_errors = result["fs_errors"]
     console.print(f"[green]Hard-deleted agent '{agent_name}' from project '{project}'.[/]")
     console.print(
         f"[dim]Database:[/] {counts.get('messages_sent', 0)} messages, "
@@ -3441,13 +3430,7 @@ def hard_delete_agent(
         f"{counts.get('agent_links', 0)} agent links, "
         f"{counts.get('window_identities', 0)} window identities"
     )
-    console.print(
-        f"[dim]Filesystem:[/] {counts.get('archive_files_removed', 0)} files and "
-        f"{counts.get('archive_dirs_removed', 0)} directories removed"
-    )
-    if fs_errors:
-        for err in fs_errors:
-            console.print(f"[yellow]Filesystem warning:[/] {err}")
+    console.print("[dim]Historical archive files were preserved.[/]")
 
 
 @app.command("hard-delete-project")
@@ -3465,16 +3448,16 @@ def hard_delete_project(
         typer.Option("--token", "-t", help="Registration token (must match a registered agent in the project)."),
     ] = None,
 ) -> None:
-    """Permanently delete a project and ALL associated data (agents, messages, files, database records).
+    """Permanently reclaim database mailbox records and system-owned mailbox files.
 
-    This is NOT soft-delete. The entire project is physically destroyed and cannot be recovered.
+    Source repositories, original legacy archives and external backups are retained.
     Requires --confirm='I UNDERSTAND' to proceed.
     """
     if confirmation != "I UNDERSTAND":
         console.print(
             "[red]Hard delete requires --confirm='I UNDERSTAND' (case-sensitive).[/]\n"
-            "[yellow]This operation is IRREVERSIBLE — ALL agents, messages, files, and database records "
-            "for this project will be permanently destroyed.[/]"
+            "[yellow]This operation is IRREVERSIBLE — mailbox database records and managed files "
+            "will be reclaimed. Source repositories and legacy archives are retained.[/]"
         )
         raise typer.Exit(code=1)
 
@@ -3509,129 +3492,12 @@ def hard_delete_project(
             ):
                 raise ValueError("Invalid registration_token — must match a registered agent in the project")
 
-        deleted_counts: dict[str, int] = {}
+        from .lifecycle import hard_delete_mailbox
 
-        # Phase 1: Database cleanup in a single transaction
-        async with get_session() as session:
-            # Collect all agent IDs
-            agent_rows = await session.execute(
-                select(Agent).where(cast(Any, Agent.project_id) == project_id)
-            )
-            agents = agent_rows.scalars().all()
-            agent_ids = [a.id for a in agents]
-            deleted_counts["agents"] = len(agents)
-
-            # Collect all message IDs
-            msg_rows = await session.execute(
-                select(Message).where(cast(Any, Message.project_id) == project_id)
-            )
-            messages = msg_rows.scalars().all()
-            message_ids = [m.id for m in messages]
-            deleted_counts["messages"] = len(messages)
-
-            # Delete message recipients
-            if message_ids:
-                mr_rows = await session.execute(
-                    select(MessageRecipient).where(
-                        cast(Any, MessageRecipient.message_id).in_(message_ids)
-                    )
-                )
-                mrs = mr_rows.scalars().all()
-                deleted_counts["message_recipients"] = len(mrs)
-                for mr in mrs:
-                    await session.delete(mr)
-
-            # Delete messages (FTS cleanup by DB trigger)
-            for msg in messages:
-                await session.delete(msg)
-
-            # Delete file reservations
-            fr_rows = await session.execute(
-                select(FileReservation).where(cast(Any, FileReservation.project_id) == project_id)
-            )
-            frs = fr_rows.scalars().all()
-            deleted_counts["file_reservations"] = len(frs)
-            for fr in frs:
-                await session.delete(fr)
-
-            # Delete agent links
-            if agent_ids:
-                link_rows = await session.execute(
-                    select(AgentLink).where(
-                        or_(
-                            cast(Any, AgentLink.a_agent_id).in_(agent_ids),
-                            cast(Any, AgentLink.b_agent_id).in_(agent_ids),
-                        )
-                    )
-                )
-                links = link_rows.scalars().all()
-                deleted_counts["agent_links"] = len(links)
-                for link in links:
-                    await session.delete(link)
-
-            # Delete window identities
-            wi_rows = await session.execute(
-                select(WindowIdentity).where(cast(Any, WindowIdentity.project_id) == project_id)
-            )
-            wis = wi_rows.scalars().all()
-            deleted_counts["window_identities"] = len(wis)
-            for wi in wis:
-                await session.delete(wi)
-
-            # Delete message summaries
-            ms_rows = await session.execute(
-                select(MessageSummary).where(cast(Any, MessageSummary.project_id) == project_id)
-            )
-            summaries = ms_rows.scalars().all()
-            deleted_counts["message_summaries"] = len(summaries)
-            for ms in summaries:
-                await session.delete(ms)
-
-            # Delete sibling suggestions
-            ss_rows = await session.execute(
-                select(ProjectSiblingSuggestion).where(
-                    or_(
-                        cast(Any, ProjectSiblingSuggestion.project_a_id) == project_id,
-                        cast(Any, ProjectSiblingSuggestion.project_b_id) == project_id,
-                    )
-                )
-            )
-            suggestions = ss_rows.scalars().all()
-            deleted_counts["sibling_suggestions"] = len(suggestions)
-            for ss in suggestions:
-                await session.delete(ss)
-
-            # Delete product-project links
-            ppl_rows = await session.execute(
-                select(ProductProjectLink).where(cast(Any, ProductProjectLink.project_id) == project_id)
-            )
-            ppls = ppl_rows.scalars().all()
-            deleted_counts["product_links"] = len(ppls)
-            for ppl in ppls:
-                await session.delete(ppl)
-
-            # Delete all agents
-            for agent in agents:
-                await session.delete(agent)
-
-            # Delete the project itself
-            db_project = await session.get(Project, project_id)
-            if db_project:
-                await session.delete(db_project)
-                deleted_counts["project"] = 1
-
-            await session.commit()
-
-        # Phase 2: Filesystem cleanup (best-effort)
-        files_removed, dirs_removed, fs_errors = await asyncio.to_thread(
-            _delete_project_archive_tree,
-            settings.storage.root,
-            project_slug,
-        )
-
-        deleted_counts["archive_files_removed"] = files_removed
-        deleted_counts["archive_dirs_removed"] = dirs_removed
-        return {"deleted_counts": deleted_counts, "fs_errors": fs_errors, "slug": project_slug}
+        if project_id is None:
+            raise ValueError("Project has no database identity")
+        await hard_delete_mailbox(settings, project_id)
+        return {"slug": project_slug}
 
     try:
         result = _run_async(_execute())
@@ -3639,27 +3505,8 @@ def hard_delete_project(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(code=1) from exc
 
-    counts = result["deleted_counts"]
-    fs_errors = result["fs_errors"]
     console.print(f"[green]Hard-deleted project '{project}' (slug: {result['slug']}).[/]")
-    console.print(
-        f"[dim]Database:[/] {counts.get('agents', 0)} agents, "
-        f"{counts.get('messages', 0)} messages, "
-        f"{counts.get('message_recipients', 0)} recipient records, "
-        f"{counts.get('file_reservations', 0)} file reservations, "
-        f"{counts.get('agent_links', 0)} agent links, "
-        f"{counts.get('window_identities', 0)} window identities, "
-        f"{counts.get('message_summaries', 0)} message summaries, "
-        f"{counts.get('sibling_suggestions', 0)} sibling suggestions, "
-        f"{counts.get('product_links', 0)} product links"
-    )
-    console.print(
-        f"[dim]Filesystem:[/] {counts.get('archive_files_removed', 0)} files and "
-        f"{counts.get('archive_dirs_removed', 0)} directories removed"
-    )
-    if fs_errors:
-        for err in fs_errors:
-            console.print(f"[yellow]Filesystem warning:[/] {err}")
+    console.print("[dim]Database records and managed mailbox files reclaimed; source repositories and legacy archives retained.[/]")
 
 
 @app.command("migrate")
@@ -3967,7 +3814,7 @@ def am_run(
     server_request_timeout_seconds = 5.0
     effective_ttl_seconds = _effective_build_slot_ttl_seconds(ttl_seconds)
     renew_interval_seconds = _build_slot_renew_interval_seconds(ttl_seconds)
-    archive = _run_async(ensure_archive(settings, slug))
+    archive = _run_async(ensure_mailbox_storage(settings, slug))
 
     def _safe_component(value: str) -> str:
         s = value.strip()
@@ -4435,7 +4282,7 @@ def guard_check(
         console.print("[red]Internal error: cannot import slug helper.[/]")
         raise typer.Exit(code=1) from None
     slug_value = _compute_slug(str(repo_root))
-    archive = _run_async(ensure_archive(settings, slug_value))
+    archive = _run_async(ensure_mailbox_storage(settings, slug_value))
 
     # Read NUL-delimited paths from STDIN
     paths: list[str] = []
@@ -4535,183 +4382,6 @@ def guard_check(
             console.print("[dim]Hints: set AGENT_MAIL_GUARD_MODE=warn for advisory, or AGENT_MAIL_BYPASS=1 to bypass in emergencies.[/]")
             raise typer.Exit(code=1)
     raise typer.Exit(code=0)
-
-@projects_app.command("adopt")
-def projects_adopt(
-    source: Annotated[str, typer.Argument(..., help="Old project slug or human key")],
-    target: Annotated[str, typer.Argument(..., help="New project slug or project_uid (future)")],
-    dry_run: Annotated[bool, typer.Option("--dry-run/--apply", help="Show plan without applying changes.")] = True,
-) -> None:
-    """
-    Plan and optionally apply consolidation of legacy per-worktree projects into a canonical project.
-    """
-    async def _load(slug_or_key: str) -> Project:
-        return await _get_project_record(slug_or_key)
-
-    try:
-        async def _both() -> tuple[Project, Project]:
-            return await asyncio.gather(_load(source), _load(target))
-        src, dst = _run_async(_both())
-    except Exception as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
-    if src.id == dst.id:
-        console.print("[yellow]Source and target refer to the same project; nothing to do.[/]")
-        return
-
-    plan: list[str] = []
-    plan.append(f"Source: id={src.id} slug={src.slug} key={src.human_key}")
-    plan.append(f"Target: id={dst.id} slug={dst.slug} key={dst.human_key}")
-
-    # Heuristic: same repo if git-common-dir hashes match
-    def _git(path: Path, *args: str) -> str | None:
-        try:
-            cp = subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True, text=True)
-            return cp.stdout.strip()
-        except Exception:
-            return None
-
-    src_gdir = _git(Path(src.human_key), "rev-parse", "--git-common-dir")
-    dst_gdir = _git(Path(dst.human_key), "rev-parse", "--git-common-dir")
-    same_repo = bool(src_gdir and dst_gdir and Path(src_gdir).resolve() == Path(dst_gdir).resolve())
-    plan.append(f"Same repo (git-common-dir): {'yes' if same_repo else 'no'}")
-
-    if not same_repo:
-        console.print("[red]Refusing to adopt: projects do not appear to belong to the same repository.[/]")
-        return
-
-    # Describe filesystem moves (archive layout)
-    settings = get_settings()
-    from .storage import ensure_archive as _ensure_archive
-    src_archive = _run_async(_ensure_archive(settings, src.slug))
-    dst_archive = _run_async(_ensure_archive(settings, dst.slug))
-    plan.append(f"Move Git artifacts: {src_archive.root} -> {dst_archive.root}")
-    plan.append("Re-key DB rows: source project_id -> target project_id (messages, agents, file_reservations, etc.)")
-    plan.append("Write aliases.json under target 'projects/<slug>/' with former_slugs")
-
-    console.print("[bold]Projects adopt plan (dry-run)[/bold]")
-    for line in plan:
-        console.print(f"- {line}")
-
-    if dry_run:
-        return
-    # Apply phase
-    async def _apply() -> None:
-        if src.id is None or dst.id is None:
-            raise typer.BadParameter("Projects must be persisted (id not null).")
-        # Detect agent name conflicts
-        await ensure_schema()
-        async with get_session() as session:
-            src_agents = [row[0] for row in (await session.execute(select(Agent.name).where(cast(ColumnElement[bool], Agent.project_id == src.id)))).all()]
-            dst_agents = [row[0] for row in (await session.execute(select(Agent.name).where(cast(ColumnElement[bool], Agent.project_id == dst.id)))).all()]
-            dup = sorted(set(src_agents).intersection(set(dst_agents)))
-            if dup:
-                raise typer.BadParameter(f"Agent name conflicts in target project: {', '.join(dup)}")
-        # Move Git artifacts
-        settings = get_settings()
-        # local import to minimize top-level churn and keep ordering stable
-        from git import Actor
-
-        from .storage import (
-            AsyncFileLock as _AsyncFileLock,
-            _commit as _archive_commit,
-            _commit_lock_path as _commit_lock_path,
-        )
-
-        async def _commit_archive_move(
-            *,
-            add_relpaths: Sequence[str],
-            remove_relpaths: Sequence[str],
-            message: str,
-        ) -> None:
-            combined_relpaths = [*remove_relpaths, *add_relpaths]
-            if not combined_relpaths:
-                return
-            actor = Actor(settings.storage.git_author_name, settings.storage.git_author_email)
-            commit_lock_path = _commit_lock_path(dst_archive.repo_root, combined_relpaths)
-            async with _AsyncFileLock(commit_lock_path):
-                if remove_relpaths:
-                    await asyncio.to_thread(
-                        dst_archive.repo.git.rm,
-                        "--cached",
-                        "--ignore-unmatch",
-                        "--",
-                        *remove_relpaths,
-                    )
-                if add_relpaths:
-                    await asyncio.to_thread(dst_archive.repo.git.add, "--", *add_relpaths)
-                if await asyncio.to_thread(dst_archive.repo.is_dirty, index=True, working_tree=True):
-                    await asyncio.to_thread(
-                        dst_archive.repo.index.commit,
-                        message,
-                        author=actor,
-                        committer=actor,
-                    )
-
-        lock_order = tuple(sorted((src_archive, dst_archive), key=lambda archive: str(archive.lock_path)))
-        async with archive_write_lock(lock_order[0]), archive_write_lock(lock_order[1]):
-            move_candidates: list[tuple[Path, Path]] = []
-            collisions: list[str] = []
-            for path_item in sorted(src_archive.root.rglob("*"), key=str):
-                # rglob returns Path objects at runtime; cast for type checker
-                path = cast(Path, path_item)
-                if not path.is_file():
-                    continue
-                if path.name.endswith(".lock") or path.name.endswith(".lock.owner.json"):
-                    continue
-                rel_from_root = path.relative_to(src_archive.root)
-                dest_path = dst_archive.root / rel_from_root
-                if await asyncio.to_thread(dest_path.exists):
-                    collisions.append(rel_from_root.as_posix())
-                    continue
-                move_candidates.append((path, dest_path))
-            if collisions:
-                preview = ", ".join(collisions[:5])
-                suffix = f" (+{len(collisions) - 5} more)" if len(collisions) > 5 else ""
-                raise typer.BadParameter(f"Target archive already contains conflicting paths: {preview}{suffix}")
-
-            moved_relpaths: list[str] = []
-            removed_relpaths: list[str] = []
-            for source_path, dest_path in move_candidates:
-                await asyncio.to_thread(dest_path.parent.mkdir, parents=True, exist_ok=True)
-                await asyncio.to_thread(source_path.replace, dest_path)
-                moved_relpaths.append(dest_path.relative_to(dst_archive.repo_root).as_posix())
-                removed_relpaths.append(source_path.relative_to(src_archive.repo_root).as_posix())
-
-            await _commit_archive_move(
-                add_relpaths=moved_relpaths,
-                remove_relpaths=removed_relpaths,
-                message=f"adopt: move {src.slug} into {dst.slug}",
-            )
-
-            # Write aliases.json under target while the same archive surfaces stay locked.
-            aliases_path = dst_archive.root / "aliases.json"
-            try:
-                existing: dict[str, Any] = {}
-                if await asyncio.to_thread(aliases_path.exists):
-                    existing = json.loads(await asyncio.to_thread(aliases_path.read_text, encoding="utf-8"))
-                former = set(existing.get("former_slugs", []))
-                former.add(src.slug)
-                existing["former_slugs"] = sorted(former)
-                await asyncio.to_thread(aliases_path.write_text, json.dumps(existing, indent=2), "utf-8")
-                rel_alias = aliases_path.relative_to(dst_archive.repo_root).as_posix()
-                await _archive_commit(dst_archive.repo, settings, f"adopt: record alias for {src.slug}", [rel_alias])
-            except Exception as exc:
-                console.print(f"[yellow]Warning: failed to write aliases.json: {exc}[/]")
-        # Re-key database rows (agents, messages, file_reservations)
-        async with get_session() as session:
-            from sqlalchemy import update as _update  # local import to avoid top-of-file churn
-            await session.execute(_update(Agent).where(cast(ColumnElement[bool], Agent.project_id == src.id)).values(project_id=dst.id))
-            await session.execute(_update(Message).where(cast(ColumnElement[bool], Message.project_id == src.id)).values(project_id=dst.id))
-            await session.execute(_update(FileReservation).where(cast(ColumnElement[bool], FileReservation.project_id == src.id)).values(project_id=dst.id))
-            await session.commit()
-
-    try:
-        _run_async(_apply())
-        console.print("[green]Adoption apply completed.[/]")
-    except Exception as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
 
 @file_reservations_app.command("active")
 def file_reservations_active(
@@ -5722,7 +5392,6 @@ def doctor_check(
         console.print("[green]All checks passed![/green]")
 
 
-@doctor_app.command("repair")
 def doctor_repair(
     project: Annotated[
         Optional[str],
@@ -5900,7 +5569,6 @@ def doctor_repair(
         raise typer.Exit(code=1)
 
 
-@doctor_app.command("backups")
 def doctor_backups(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
@@ -5949,139 +5617,6 @@ def doctor_backups(
         )
 
     console.print(table)
-
-
-@doctor_app.command("restore")
-def doctor_restore(
-    backup_path: Annotated[
-        Path,
-        typer.Argument(help="Path to backup directory to restore from"),
-    ],
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview what would be restored"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
-) -> None:
-    """Restore from a diagnostic backup.
-
-    WARNING: This will overwrite current database and archive.
-    A pre-restore backup will be created automatically.
-    """
-    if not backup_path.exists():
-        console.print(f"[red]Backup path not found:[/red] {backup_path}")
-        raise typer.Exit(code=1)
-
-    manifest_path = backup_path / "manifest.json"
-    if not manifest_path.exists():
-        console.print(f"[red]Invalid backup:[/red] No manifest.json found in {backup_path}")
-        raise typer.Exit(code=1)
-
-    # Show backup info
-    try:
-        from .storage import _parse_backup_manifest, _resolve_backup_file_artifact
-
-        with manifest_path.open(encoding="utf-8") as f:
-            manifest = _parse_backup_manifest(json.load(f))
-        if manifest.database_path is not None:
-            try:
-                _resolve_backup_file_artifact(backup_path, manifest.database_path)
-            except FileNotFoundError as exc:
-                raise ValueError(
-                    f"manifest.json references missing artifact: {manifest.database_path}"
-                ) from exc
-            except IsADirectoryError as exc:
-                raise ValueError(
-                    f"manifest.json artifact is not a file: {manifest.database_path}"
-                ) from exc
-        for bundle_ref in manifest.project_bundles:
-            try:
-                _resolve_backup_file_artifact(backup_path, bundle_ref)
-            except FileNotFoundError as exc:
-                raise ValueError(f"manifest.json references missing artifact: {bundle_ref}") from exc
-            except IsADirectoryError as exc:
-                raise ValueError(f"manifest.json artifact is not a file: {bundle_ref}") from exc
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        console.print(f"[red]Invalid backup manifest:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-
-    console.print("\n[bold cyan]Restore from Backup[/bold cyan]")
-    console.print(f"  Created: {manifest.created_at}")
-    console.print(f"  Reason: {manifest.reason}")
-    console.print(f"  Has database: {'Yes' if manifest.database_path else 'No'}")
-    console.print(f"  Bundles: {len(manifest.project_bundles)}")
-
-    if dry_run:
-        console.print("\n[yellow]Dry run - no changes will be made[/yellow]")
-
-    if not dry_run and not yes:
-        console.print("\n[red]WARNING:[/red] This will overwrite your current database and archive!")
-        if not typer.confirm("Continue with restore?", default=False):
-            console.print("[yellow]Restore cancelled[/yellow]")
-            return
-
-    async def _run() -> dict[str, Any]:
-        from .db import get_database_path
-        from .storage import create_diagnostic_backup, restore_from_backup
-
-        settings = get_settings()
-        if dry_run:
-            return await restore_from_backup(settings, backup_path, dry_run=True)
-
-        pre_restore_backup: Path | None = None
-        current_db_path = get_database_path(settings)
-        current_archive_root = await asyncio.to_thread(
-            lambda: Path(settings.storage.root).expanduser().resolve()
-        )
-        has_current_db = bool(
-            current_db_path and await asyncio.to_thread(current_db_path.exists)
-        )
-        has_current_archive = await asyncio.to_thread((current_archive_root / ".git").exists)
-
-        if has_current_db or has_current_archive:
-            pre_restore_backup = await create_diagnostic_backup(settings, reason="pre-restore")
-        restore_result = await restore_from_backup(settings, backup_path, dry_run=False)
-        if pre_restore_backup is not None:
-            restore_result["pre_restore_backup_path"] = str(pre_restore_backup)
-        else:
-            restore_result["pre_restore_backup_skipped_reason"] = "no current database or archive found"
-        return restore_result
-
-    try:
-        result = _run_async(_run())
-    except Exception as exc:
-        console.print(f"[red]Restore failed:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-
-    if dry_run:
-        preview_errors = list(result.get("errors", []))
-        if preview_errors:
-            console.print("\n[bold red]Dry run found restore blockers:[/bold red]")
-        else:
-            console.print("\n[bold]Would restore:[/bold]")
-        if result.get("would_restore_database"):
-            console.print("  - Database")
-        for bundle in result.get("would_restore_bundles", []):
-            console.print(f"  - Bundle: {bundle}")
-        for error in preview_errors:
-            console.print(f"  [red]Error:[/red] {error}")
-        if preview_errors:
-            raise typer.Exit(code=1)
-    else:
-        restore_errors = list(result.get("errors", []))
-        if restore_errors:
-            console.print("\n[bold red]Restore completed with errors:[/bold red]")
-        else:
-            console.print("\n[bold]Restore complete:[/bold]")
-        if result.get("pre_restore_backup_path"):
-            console.print(f"  [cyan]Pre-restore backup:[/cyan] {result['pre_restore_backup_path']}")
-        elif result.get("pre_restore_backup_skipped_reason"):
-            console.print(f"  [dim]Pre-restore backup skipped:[/dim] {result['pre_restore_backup_skipped_reason']}")
-        if result.get("database_restored"):
-            console.print("  [green]Database restored[/green]")
-        for bundle in result.get("bundles_restored", []):
-            console.print(f"  [green]Bundle restored:[/green] {bundle}")
-        for error in restore_errors:
-            console.print(f"  [red]Error:[/red] {error}")
-        if restore_errors:
-            raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

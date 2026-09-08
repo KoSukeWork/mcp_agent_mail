@@ -132,3 +132,32 @@ concurrent purge claims, restore during preflight, write fences, path traversal,
 rendered Chinese/English controls in Node.js. Related migration, HTTP localization, attachment,
 share/export, guard, and activity-touch regressions are tested separately. Full slow/performance
 coverage remains a CI responsibility; these checks are not a claim of a complete green CI run.
+
+### Git data retirement and legacy import
+
+- Public Git archive browser routes and `projects adopt` / `doctor repair|backups|restore`
+  commands are retired. Messaging, inbox/global deletion, activity, and retention reporting use
+  the database; quota scans inspect managed attachments rather than retained Git copies.
+- `archive import-legacy` is a transactional dry run. `--apply` first creates a non-Git ZIP
+  backup, then imports atomically. Conflicts, unknown projects, unmatched copies, linked paths,
+  and history-only content block import rather than overwrite originals. Empty directories are
+  reported without creating mailboxes.
+- `legacy_import_records` stores source digests, not message contents or credentials. Completed
+  unchanged sources are skipped even after mailbox purge; changed sources require reconciliation.
+  A full database reset removes this ledger too, but startup never automatically imports archives.
+- Hard deletion uses lifecycle ownership checks and write fences. Reset/restore reject linked
+  targets before resolving paths, protect registered source directories, and require ownership
+  evidence. Purge/reset cannot delete their ownership database as part of managed storage.
+- ZIP backups exclude `.git`, preserve existing ZIPs through exclusive creation, and use mode
+  `0600` on POSIX. The archive preset contains credentials and must remain private. Restore retains
+  pre-restore originals; it does not reconstruct Git history.
+
+Deployment check on 2026-09-08: preflight and backed-up `--apply` both found zero importable
+messages/identities and three empty/test legacy directories. SHA-256 checks of 25 retained
+legacy/Git files found no changes. The resulting ZIP passed CRC validation, contained the database,
+excluded Git metadata, and was confirmed ignored by source control. This is a verified empty
+import, not evidence of a nonempty production migration.
+
+Retirement cleanup is still in progress: unregistered legacy implementations in CLI/HTTP/storage
+and their obsolete tests need further removal. Do not treat registration removal alone as complete
+code retirement. Full CI and the latest homepage's complete real-browser acceptance remain pending.

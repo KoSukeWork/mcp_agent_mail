@@ -280,7 +280,7 @@ async def test_hard_delete_project_rejects_legacy_tokenless_project(isolated_env
 
 
 @pytest.mark.asyncio
-async def test_hard_delete_project_removes_archive_tree(isolated_env, tmp_path):
+async def test_hard_delete_project_reclaims_managed_files_and_preserves_legacy(isolated_env, tmp_path):
     server = build_mcp_server()
     async with Client(server) as client:
         project_result = await client.call_tool("ensure_project", {"human_key": "/deletable/project"})
@@ -295,6 +295,9 @@ async def test_hard_delete_project_removes_archive_tree(isolated_env, tmp_path):
         archive_file = tmp_path / "storage" / "projects" / slug / "messages" / "dummy.txt"
         archive_file.parent.mkdir(parents=True, exist_ok=True)
         archive_file.write_text("dummy archive content", encoding="utf-8")
+        managed_dir = tmp_path / "storage" / "mailboxes" / slug
+        managed_dir.mkdir(parents=True, exist_ok=True)
+        (managed_dir / "attachment.txt").write_text("managed attachment", encoding="utf-8")
 
         result = await client.call_tool(
             "hard_delete_project",
@@ -306,12 +309,16 @@ async def test_hard_delete_project_removes_archive_tree(isolated_env, tmp_path):
         )
 
     assert result.data["status"] == "hard_deleted"
-    assert result.data["deleted_counts"]["archive_files_removed"] >= 1
-    assert not (tmp_path / "storage" / "projects" / slug).exists()
+    assert result.data["legacy_archives_preserved"] is True
+    assert archive_file.read_text(encoding="utf-8") == "dummy archive content"
+    assert not managed_dir.exists()
+    assert not (tmp_path / "storage" / ".git").exists()
+    async with get_session() as session:
+        assert await session.get(Project, project_payload["id"]) is None
 
 
 @pytest.mark.asyncio
-async def test_hard_delete_agent_removes_archive_tree(isolated_env, tmp_path):
+async def test_hard_delete_agent_preserves_legacy_archive(isolated_env, tmp_path):
     server = build_mcp_server()
     async with Client(server) as client:
         project_result = await client.call_tool("ensure_project", {"human_key": "/deletable/agent"})
@@ -339,8 +346,11 @@ async def test_hard_delete_agent_removes_archive_tree(isolated_env, tmp_path):
         )
 
     assert result.data["status"] == "hard_deleted"
-    assert result.data["deleted_counts"]["archive_files_removed"] >= 1
-    assert not agent_archive_dir.exists()
+    assert result.data["legacy_archives_preserved"] is True
+    assert (agent_archive_dir / "dummy.txt").read_text(encoding="utf-8") == "dummy archive content"
+    assert not (tmp_path / "storage" / ".git").exists()
+    async with get_session() as session:
+        assert await session.get(Agent, agent_result.data["id"]) is None
 
 
 @pytest.mark.asyncio
@@ -490,18 +500,15 @@ async def test_set_contact_policy_invalid_policy(isolated_env):
         )
         agent_name = agent_result.data["name"]
 
-        # API normalizes invalid policies to "auto" instead of rejecting
-        result = await client.call_tool(
-            "set_contact_policy",
-            {
-                "project_key": "InvalidPolicy",
-                "agent_name": agent_name,
-                "policy": "invalid_policy_value",
-            },
-        )
-        # Should succeed with normalized policy
-        assert result.data["policy"] == "auto"
-        assert result.data["agent"] == agent_name
+        with pytest.raises(ToolError, match="Unknown contact policy"):
+            await client.call_tool(
+                "set_contact_policy",
+                {
+                    "project_key": "InvalidPolicy",
+                    "agent_name": agent_name,
+                    "policy": "invalid_policy_value",
+                },
+            )
 
 
 # ============================================================================
