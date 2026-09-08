@@ -181,7 +181,10 @@ async def test_mailbox_http_and_only_navigation_renews(isolated_env):
     project = await make_project()
     await configure_mailbox(project.id, mailbox_type="temporary", now=datetime(2020, 1, 1))
     async with AsyncClient(transport=ASGITransport(app=build_http_app(get_settings())), base_url="http://test") as client:
-        response = await client.get("/mail/mailboxes?lang=zh-CN")
+        redirect = await client.get("/mail/mailboxes?lang=zh-CN")
+        assert redirect.status_code == 303
+        assert redirect.headers["location"] == "/mail/projects?lang=zh-CN"
+        response = await client.get("/mail/projects?lang=zh-CN")
         assert response.status_code == 200
         assert "长期邮箱" in response.text and "临时邮箱" in response.text and "回收站" in response.text
         assert (await client.get("/mail/api/unified-inbox")).status_code == 200
@@ -292,6 +295,49 @@ async def test_cross_mailbox_references_pause_cleanup_and_allow_restore(isolated
 
 
 @pytest.mark.asyncio
+async def test_project_view_integrates_categories_and_inline_controls(isolated_env):
+    permanent = await make_project("permanent-view")
+    temporary = await make_project("temporary-view")
+    trashed = await make_project("trashed-view")
+    await configure_mailbox(temporary.id, mailbox_type="temporary")
+    await configure_mailbox(trashed.id, mailbox_type="temporary")
+    await configure_mailbox(trashed.id, action="trash")
+    async with AsyncClient(transport=ASGITransport(app=build_http_app(get_settings())), base_url="http://test") as client:
+        for category, visible in [("all", [permanent, temporary]), ("permanent", [permanent]),
+                                  ("temporary", [temporary]), ("trash", [trashed])]:
+            response = await client.get(f"/mail/projects?category={category}&lang=zh-CN")
+            assert response.status_code == 200
+            html = response.text
+            assert "data-mailbox-categories" in html
+            for project in (permanent, temporary, trashed):
+                assert (f'data-project-id="{project.id}"' in html) == (project in visible)
+            assert 'href="/mail/mailboxes"' not in html
+            if category == "temporary":
+                assert "到期时间" in html and "转为长期邮箱" in html and 'x-model.number="p.retention_days"' in html
+                assert f'href="/mail/{temporary.slug}"' in html
+            if category == "trash":
+                assert "恢复邮箱" in html
+                assert f'href="/mail/{trashed.slug}"' not in html
+        async with get_session() as session:
+            archived = await session.get(Project, permanent.id)
+            assert archived is not None
+            archived.archived_at = datetime.now(UTC).replace(tzinfo=None)
+            archived_trash = await session.get(Project, trashed.id)
+            assert archived_trash is not None
+            archived_trash.archived_at = archived.archived_at
+            await session.commit()
+        archived_html = (await client.get("/mail/projects?category=permanent&lang=zh-CN")).text
+        assert "转为临时邮箱" in archived_html and f'href="/mail/{permanent.slug}"' in archived_html
+        trash_html = (await client.get("/mail/projects?category=trash&lang=zh-CN")).text
+        assert f'data-project-id="{trashed.id}"' in trash_html and "恢复邮箱" in trash_html
+        result = await client.post(f"/mail/api/mailboxes/{trashed.id}", json={"action": "restore"})
+        assert result.status_code == 200
+        empty = (await client.get("/mail/projects?category=trash&lang=zh-CN")).text
+        assert "此类别中暂无邮箱。" in empty and "data-mailbox-categories" in empty
+        assert (await client.get("/mail/projects?category=invalid")).status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_startup_rebuilds_preexisting_guard_reservations(isolated_env):
     from fastmcp import Client
 
@@ -361,7 +407,7 @@ async def test_mailbox_controls_execute_in_both_languages(isolated_env, locale, 
         pytest.skip("Node.js is required to execute the rendered JavaScript")
     await make_project()
     async with AsyncClient(transport=ASGITransport(app=build_http_app(get_settings())), base_url="http://test") as client:
-        html = (await client.get(f"/mail/mailboxes?lang={locale}")).text
+        html = (await client.get(f"/mail/projects?lang={locale}")).text
     script = re.search(r"<script>\s*(function mailboxManager\(\).*?)</script>", html, re.S)
     assert script is not None
     program = script.group(1) + "\n" + f"""
@@ -371,6 +417,17 @@ const assert = require('node:assert/strict');
   assert.equal(manager.tabs[0].label, {json.dumps(label)});
   const original = manager.items[0];
   const updated = {{...original, mailbox_type: 'temporary'}};
+  let navigations = 0;
+  global.window = {{location: {{
+    href: 'http://test/mail/projects?lang={locale}',
+    assign(url) {{
+      const target = new URL(url);
+      assert.equal(target.pathname, '/mail/projects');
+      assert.equal(target.searchParams.get('category'), 'temporary');
+      assert.equal(target.searchParams.get('lang'), '{locale}');
+      navigations++;
+    }}
+  }}}};
   global.fetch = async (url, options) => {{
     assert.equal(url, '/mail/api/mailboxes/' + original.id);
     assert.equal(options.method, 'POST');
@@ -381,11 +438,13 @@ const assert = require('node:assert/strict');
   assert.equal(manager.category, 'temporary');
   assert.equal(manager.items[0].mailbox_type, 'temporary');
   assert.equal(manager.notice, {json.dumps(saved)});
+  assert.equal(navigations, 1);
   global.fetch = async () => ({{ok: false}});
   await manager.change(updated, {{action: 'trash'}});
   assert.equal(manager.busy, false);
   assert.equal(manager.category, 'temporary');
   assert.notEqual(manager.notice, {json.dumps(saved)});
+  assert.equal(navigations, 1);
 }})().catch(error => {{console.error(error); process.exitCode = 1;}});
 """
     result = await asyncio.to_thread(subprocess.run, [node], input=program, text=True, encoding="utf-8",

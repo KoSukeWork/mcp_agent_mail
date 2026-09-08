@@ -1554,7 +1554,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     project_id = project.id
                     if project.mailbox_state != "active":
                         if "text/html" in request.headers.get("accept", ""):
-                            return RedirectResponse("/mail/mailboxes", status_code=303)
+                            return RedirectResponse("/mail/projects?category=trash", status_code=303)
                         return JSONResponse({"detail": "Mailbox is in the recycle bin or being cleaned up"}, status_code=410)
         response = await call_next(request)
         if (project_id is not None and request.method == "GET" and response.status_code == 200
@@ -2446,11 +2446,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             return await _render("mail_activity.html", events=[dict(row) for row in rows])
 
         @fastapi_app.get("/mail/mailboxes", response_class=HTMLResponse)
-        async def mail_mailboxes() -> HTMLResponse:
-            from .lifecycle import list_mailboxes
-
-            await ensure_schema(settings)
-            return await _render("mail_mailboxes.html", mailboxes=await list_mailboxes())
+        async def mail_mailboxes(request: Request) -> RedirectResponse:
+            query = f"?{request.url.query}" if request.url.query else ""
+            return RedirectResponse(f"/mail/projects{query}", status_code=303)
 
         @fastapi_app.post("/mail/api/mailboxes/{project_id}", response_class=JSONResponse)
         async def configure_mailbox_api(project_id: int, request: Request) -> JSONResponse:
@@ -2472,31 +2470,48 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         @fastapi_app.get("/mail/projects", response_class=HTMLResponse)
-        async def mail_projects_list() -> HTMLResponse:
+        async def mail_projects_list(category: str = "all") -> HTMLResponse:
             """Projects list view (moved from /mail)"""
+            from .lifecycle import mailbox_dict
+
+            if category not in {"all", "permanent", "temporary", "trash"}:
+                raise HTTPException(status_code=400, detail="Invalid mailbox category")
             await ensure_schema()
             await refresh_project_sibling_suggestions()
             sibling_map = await get_project_sibling_data()
             async with get_session() as session:
-                rows = await session.execute(
-                        text("SELECT id, slug, human_key, created_at, archived_at FROM projects WHERE mailbox_state = 'active' ORDER BY created_at DESC")
-                )
+                rows = await session.scalars(select(Project).order_by(text("created_at DESC")))
                 projects = []
-                for r in rows.fetchall():
-                    project_id = int(r[0])
+                for project in rows.all():
+                    assert project.id is not None
+                    project_id = project.id
                     siblings = sibling_map.get(project_id, {"confirmed": [], "suggested": []})
                     projects.append(
                         {
                             "id": project_id,
-                            "slug": r[1],
-                            "human_key": r[2],
-                            "created_at": str(r[3]),
-                            "archived_at": str(r[4]) if r[4] else None,
+                            "slug": project.slug,
+                            "human_key": project.human_key,
+                            "created_at": str(project.created_at),
+                            "archived_at": str(project.archived_at) if project.archived_at else None,
                             "confirmed_siblings": siblings.get("confirmed", []),
                             "suggested_siblings": siblings.get("suggested", []),
+                            **mailbox_dict(project),
+                            "mailbox": mailbox_dict(project),
                         }
                     )
-            return await _render("mail_index.html", projects=projects)
+            def group(project: dict[str, Any]) -> str:
+                return project["mailbox_type"] if project["mailbox_state"] == "active" else "trash"
+
+            counts = {key: sum(group(project) == key for project in projects)
+                      for key in ("permanent", "temporary", "trash")}
+            counts["all"] = sum(project["mailbox_state"] == "active" for project in projects)
+            mailboxes = [project["mailbox"] for project in projects]
+            projects = [project for project in projects if
+                        (project["mailbox_state"] == "active" if category == "all" else group(project) == category)]
+            return await _render("mail_index.html", projects=projects, mailboxes=mailboxes,
+                                 category=category, category_counts=counts,
+                                 active_projects=[p for p in projects if not p["archived_at"] or p["mailbox_state"] != "active"],
+                                 archived_projects=[p for p in projects if p["archived_at"] and p["mailbox_state"] == "active"])
 
         @fastapi_app.get("/mail/{project}", response_class=HTMLResponse)
         async def mail_project(
