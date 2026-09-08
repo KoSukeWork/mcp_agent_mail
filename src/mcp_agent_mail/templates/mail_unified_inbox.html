@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "mail_mailboxes.html" as lifecycle with context %}
 
 {% block title %}{{ _("Unified Inbox") }} — {{ _("Agent Mail") }}{% endblock %}
 
@@ -573,15 +574,16 @@
 </div>
 
 <!-- Projects Section Below Unified Inbox -->
-<div id="projects" class="mb-12 page-transition scroll-mt-40" x-data="{ searchQuery: '' }">
+{{ lifecycle.script(home=true) }}
+<div id="projects" class="mb-12 page-transition scroll-mt-40" x-data="mailboxManager()">
   <div class="border-t-2 border-slate-200 dark:border-slate-700 pt-8 mb-8">
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
       <div>
         <h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-2">{{ _("Your Projects") }}</h2>
-      <p class="text-slate-600 dark:text-slate-400">{{ _('{count} project(s) in total').format(count=projects|length) }}</p>
+      <p class="text-slate-600 dark:text-slate-400">{{ _('{count} project(s) in total').format(count=project_cards|length) }}</p>
       </div>
 
-      {% if projects|length > 0 %}
+      {% if project_cards|length > 0 %}
       <div class="relative">
         <i data-lucide="search" class="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400"></i>
         <input
@@ -595,28 +597,39 @@
       {% endif %}
     </div>
 
-    {% if projects %}
-    {% set active_projects = projects | rejectattr('archived_at') | list %}
-    {% set archived_projects = projects | selectattr('archived_at') | list %}
+    <nav aria-label="{{ _('Mailboxes') }}" class="flex flex-wrap gap-2 mb-6" data-home-mailbox-categories>
+      {% for key, label in [('all', _('All')), ('permanent', _('Permanent mailboxes')), ('temporary', _('Temporary mailboxes')), ('trash', _('Recycle bin'))] %}
+      <button type="button" @click="category = '{{ key }}'" :aria-pressed="category === '{{ key }}'"
+              :class="category === '{{ key }}' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800'"
+              class="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 font-medium">
+        {{ label }} <span x-text="count('{{ key }}')"></span>
+      </button>
+      {% endfor %}
+    </nav>
+    <p x-cloak x-show="notice" x-text="notice" role="status" class="mb-4 text-amber-700 dark:text-amber-300"></p>
+    {% if project_cards %}
+    {% set active_projects = project_cards | rejectattr('archived_at') | list %}
+    {% set archived_projects = project_cards | selectattr('archived_at') | list %}
 
     {% if active_projects %}
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {% for p in active_projects %}
-      <a href="/mail/{{ p.slug }}"
-         x-show="!searchQuery || '{{ (p.human_key ~ ' ' ~ p.slug)|replace('\\', '\\\\')|replace("'", "\\'") }}'.toLowerCase().includes(searchQuery.toLowerCase())"
+      <div data-home-project-id="{{ p.id }}" x-cloak
+         {% if p.mailbox_state == 'active' %}@click="if (!$event.target.closest('a,button,input,select')) window.location.href = {{ ('/mail/' ~ p.slug)|tojson|forceescape }}"{% endif %}
+         x-show="matches({{ p.mailbox|tojson|forceescape }})"
          class="block bg-white dark:bg-slate-800 rounded-lg p-6 border border-slate-200 dark:border-slate-700 hover:border-primary-400 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
 
         <div class="flex items-start justify-between mb-4">
           <div class="w-12 h-12 bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg flex items-center justify-center flex-shrink-0">
             <i data-lucide="folder" class="w-6 h-6 text-white"></i>
           </div>
-          <span class="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-medium rounded">
-            {{ _("Active") }}
+          <span class="px-2 py-1 {{ 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' if p.mailbox_state == 'active' else 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300' }} text-xs font-medium rounded">
+            {{ _("Active") if p.mailbox_state == 'active' else (_('Cleanup in progress') if p.mailbox_state == 'purging' else _('Recycle bin')) }}
           </span>
         </div>
 
         <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-2 line-clamp-1">
-          {{ p.human_key }}
+          {% if p.mailbox_state == 'active' %}<a href="/mail/{{ p.slug }}">{{ p.human_key }}</a>{% else %}{{ p.human_key }}{% endif %}
         </h3>
 
         <div class="space-y-2 text-sm text-slate-600 dark:text-slate-400">
@@ -631,16 +644,17 @@
         </div>
 
         <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
-          <span class="text-xs text-slate-500">{{ _("View details") }}</span>
+          <span class="text-xs text-slate-500">{{ _("View details") if p.mailbox_state == 'active' else _('Recycle bin') }}</span>
           <i data-lucide="arrow-right" class="w-4 h-4 text-primary-600 dark:text-primary-400"></i>
         </div>
-      </a>
+        {{ lifecycle.controls(p) }}
+      </div>
       {% endfor %}
     </div>
     {% endif %}
 
     {% if archived_projects %}
-    <div class="mt-6" x-data="{ showArchived: false }">
+    <div class="mt-6" x-data="{ showArchived: false }" x-show="items.some(p => matches(p) && {{ archived_projects|map(attribute='id')|list|tojson }}.includes(p.id))">
       <button @click="showArchived = !showArchived"
               class="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors mb-4">
         <i data-lucide="chevron-right" class="w-4 h-4 transition-transform duration-200" :class="showArchived ? 'rotate-90' : ''"></i>
@@ -650,8 +664,9 @@
       <div x-show="showArchived" x-collapse>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {% for p in archived_projects %}
-          <a href="/mail/{{ p.slug }}"
-             x-show="!searchQuery || '{{ (p.human_key ~ ' ' ~ p.slug)|replace('\\', '\\\\')|replace("'", "\\'") }}'.toLowerCase().includes(searchQuery.toLowerCase())"
+          <div data-home-project-id="{{ p.id }}" x-cloak
+             @click="if (!$event.target.closest('a,button,input,select')) window.location.href = {{ ('/mail/' ~ p.slug)|tojson|forceescape }}"
+             x-show="matches({{ p.mailbox|tojson|forceescape }})"
              class="block bg-slate-50 dark:bg-slate-800/50 rounded-lg p-6 border border-dashed border-slate-300 dark:border-slate-600 hover:border-amber-400 dark:hover:border-amber-600 hover:shadow-md transition-all duration-200 opacity-75 hover:opacity-100">
 
             <div class="flex items-start justify-between mb-4">
@@ -665,7 +680,7 @@
             </div>
 
             <h3 class="text-lg font-semibold text-slate-600 dark:text-slate-400 mb-2 line-clamp-1">
-              {{ p.human_key }}
+              <a href="/mail/{{ p.slug }}">{{ p.human_key }}</a>
             </h3>
 
             <div class="space-y-2 text-sm text-slate-500 dark:text-slate-500">
@@ -683,7 +698,8 @@
               <span class="text-xs text-slate-500">{{ _("View details") }}</span>
               <i data-lucide="arrow-right" class="w-4 h-4 text-slate-400"></i>
             </div>
-          </a>
+            {{ lifecycle.controls(p) }}
+          </div>
           {% endfor %}
         </div>
       </div>
@@ -691,13 +707,14 @@
     {% endif %}
 
     <!-- No search results -->
-    <div x-show="searchQuery && $el.previousElementSibling && Array.from($el.previousElementSibling.querySelectorAll('a[x-show]')).every(el => el.style.display === 'none')"
+    <div x-cloak x-show="!items.some(p => matches(p))"
          x-transition
          class="text-center py-12 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
       <i data-lucide="search-x" class="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3"></i>
       <p class="text-slate-600 dark:text-slate-400 font-medium mb-1">{{ _("No projects found") }}</p>
-      <p class="text-sm text-slate-500 dark:text-slate-500 mb-3">{{ _("No project names match your search query") }}</p>
-      <button @click="searchQuery = ''" class="mt-2 text-primary-600 dark:text-primary-400 text-sm hover:underline">
+      <p x-show="searchQuery" class="text-sm text-slate-500 dark:text-slate-500 mb-3">{{ _("No project names match your search query") }}</p>
+      <p x-show="!searchQuery" class="text-sm text-slate-500 mb-3">{{ _('No mailboxes in this category.') }}</p>
+      <button x-show="searchQuery" @click="searchQuery = ''" class="mt-2 text-primary-600 dark:text-primary-400 text-sm hover:underline">
         {{ _("Clear search") }}
       </button>
     </div>

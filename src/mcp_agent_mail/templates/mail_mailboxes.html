@@ -34,17 +34,22 @@
 </section>
 {% endmacro %}
 
-{% macro script() %}
+{% macro script(home=false) %}
 <script>
 function mailboxManager() {
   return {
-    items: {{ mailboxes | tojson }}, category: {{ category | tojson }}, busy: false, notice: '',
+    items: {{ mailboxes | tojson }}, category: {{ category | tojson }}, searchQuery: '', busy: false, notice: '',
     tabs: [
       {key: 'permanent', label: {{ _('Permanent mailboxes') | tojson }}},
       {key: 'temporary', label: {{ _('Temporary mailboxes') | tojson }}},
       {key: 'trash', label: {{ _('Recycle bin') | tojson }}}
     ],
     group(p) { return p.mailbox_state === 'active' ? p.mailbox_type : 'trash'; },
+    matches(p) {
+      const categoryMatches = this.category === 'all' ? p.mailbox_state === 'active' : this.group(p) === this.category;
+      return categoryMatches && (p.human_key + ' ' + p.slug).toLowerCase().includes(this.searchQuery.toLowerCase());
+    },
+    count(category) { return this.items.filter(p => category === 'all' ? p.mailbox_state === 'active' : this.group(p) === category).length; },
     date(value) { return value ? new Date(value).toLocaleString({{ current_locale() | tojson }}) : '—'; },
     async trash(p) {
       if (confirm({{ _('Move this temporary mailbox to the recycle bin? It will be permanently cleaned up after 7 days.') | tojson }})) await this.change(p, {action: 'trash'});
@@ -63,6 +68,7 @@ function mailboxManager() {
         this.notice = {{ _('Mailbox settings saved.') | tojson }};
         const target = new URL(window.location.href);
         target.searchParams.set('category', this.category);
+        {% if home %}target.hash = 'projects';{% endif %}
         window.location.assign(target.href);
       } catch (_) { this.notice = {{ _('Unable to update mailbox. Refresh the page and try again.') | tojson }}; }
       finally { this.busy = false; }

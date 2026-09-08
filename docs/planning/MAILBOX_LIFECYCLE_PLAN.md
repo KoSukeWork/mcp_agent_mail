@@ -82,10 +82,11 @@ database activity history, and HTTP-service maintenance worker. It is no longer 
    `uv run mcp-agent-mail guard install <project_key> <code_repo_path> --prepush`.
    Existing generated hooks point at the old reservation directory; reinstalling points them at
    the database-derived inputs. This does not change the source repository's identity scheme.
-4. Open the existing project view at `/mail/projects?lang=zh-CN` or `/mail/projects?lang=en`.
-   The All / Permanent / Temporary / Recycle bin filters and lifecycle controls are integrated
-   with the project cards, search, and related-project information. The old `/mail/mailboxes`
-   URL redirects here; there is no separate lifecycle management page.
+4. Open the homepage at `/mail?lang=zh-CN#projects` or `/mail?lang=en#projects`.
+   Its existing **Your Projects** section contains All / Permanent / Temporary / Recycle bin
+   buttons that filter cards in place, plus search and inline lifecycle controls. The unified
+   inbox remains above it. Saving returns to this same homepage section, not `/mail/projects`.
+   The old `/mail/mailboxes` URL redirects to the homepage section.
 
 ### Manual acceptance
 

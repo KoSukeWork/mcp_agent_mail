@@ -1554,7 +1554,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     project_id = project.id
                     if project.mailbox_state != "active":
                         if "text/html" in request.headers.get("accept", ""):
-                            return RedirectResponse("/mail/projects?category=trash", status_code=303)
+                            return RedirectResponse("/mail?category=trash#projects", status_code=303)
                         return JSONResponse({"detail": "Mailbox is in the recycle bin or being cleaned up"}, status_code=410)
         response = await call_next(request)
         if (project_id is not None and request.method == "GET" and response.status_code == 200
@@ -2208,14 +2208,30 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             return {"messages": messages, "projects": projects}
 
         @fastapi_app.get("/mail", response_class=HTMLResponse)
-        async def mail_unified_inbox() -> HTMLResponse:
+        async def mail_unified_inbox(category: str = "all") -> HTMLResponse:
             """Unified inbox showing ALL messages across ALL projects (Gmail-style) + Projects below"""
+            from .lifecycle import mailbox_dict
 
+            if category not in {"all", "permanent", "temporary", "trash"}:
+                raise HTTPException(status_code=400, detail="Invalid mailbox category")
             payload = await _build_unified_inbox_payload()
+            async with get_session() as session:
+                rows = await session.scalars(select(Project).order_by(text("created_at DESC")))
+                project_cards = []
+                for project in rows.all():
+                    mailbox = mailbox_dict(project)
+                    project_cards.append({
+                        **mailbox, "mailbox": mailbox, "created_at": str(project.created_at),
+                        "archived_at": str(project.archived_at)
+                        if project.archived_at and project.mailbox_state == "active" else None,
+                    })
             return await _render(
                 "mail_unified_inbox.html",
                 messages=payload.get("messages", []),
                 projects=payload.get("projects", []),
+                project_cards=project_cards,
+                mailboxes=[p["mailbox"] for p in project_cards],
+                category=category,
             )
 
         @fastapi_app.get("/mail/api/unified-inbox", response_class=JSONResponse)
@@ -2448,7 +2464,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         @fastapi_app.get("/mail/mailboxes", response_class=HTMLResponse)
         async def mail_mailboxes(request: Request) -> RedirectResponse:
             query = f"?{request.url.query}" if request.url.query else ""
-            return RedirectResponse(f"/mail/projects{query}", status_code=303)
+            return RedirectResponse(f"/mail{query}#projects", status_code=303)
 
         @fastapi_app.post("/mail/api/mailboxes/{project_id}", response_class=JSONResponse)
         async def configure_mailbox_api(project_id: int, request: Request) -> JSONResponse:

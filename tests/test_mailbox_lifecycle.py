@@ -183,7 +183,7 @@ async def test_mailbox_http_and_only_navigation_renews(isolated_env):
     async with AsyncClient(transport=ASGITransport(app=build_http_app(get_settings())), base_url="http://test") as client:
         redirect = await client.get("/mail/mailboxes?lang=zh-CN")
         assert redirect.status_code == 303
-        assert redirect.headers["location"] == "/mail/projects?lang=zh-CN"
+        assert redirect.headers["location"] == "/mail?lang=zh-CN#projects"
         response = await client.get("/mail/projects?lang=zh-CN")
         assert response.status_code == 200
         assert "长期邮箱" in response.text and "临时邮箱" in response.text and "回收站" in response.text
@@ -303,6 +303,18 @@ async def test_project_view_integrates_categories_and_inline_controls(isolated_e
     await configure_mailbox(trashed.id, mailbox_type="temporary")
     await configure_mailbox(trashed.id, action="trash")
     async with AsyncClient(transport=ASGITransport(app=build_http_app(get_settings())), base_url="http://test") as client:
+        home = await client.get("/mail?lang=zh-CN")
+        assert home.status_code == 200
+        section = home.text.split('id="projects"', 1)[1]
+        assert 'x-data="mailboxManager()"' in section
+        assert "data-home-mailbox-categories" in section
+        assert "你的项目" in section and "恢复邮箱" in section and "转为长期邮箱" in section
+        assert "@click=\"category = 'trash'\"" in section
+        for project in (permanent, temporary, trashed):
+            assert f'data-home-project-id="{project.id}"' in section
+        assert f'href="/mail/{trashed.slug}"' not in section
+        inbox = (await client.get("/mail/api/unified-inbox")).json()
+        assert trashed.id not in {p["id"] for p in inbox["projects"]}
         for category, visible in [("all", [permanent, temporary]), ("permanent", [permanent]),
                                   ("temporary", [temporary]), ("trash", [trashed])]:
             response = await client.get(f"/mail/projects?category={category}&lang=zh-CN")
@@ -401,13 +413,14 @@ async def test_restore_during_preflight_wins_over_cleanup(isolated_env, monkeypa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("locale, label, saved", [("zh-CN", "长期邮箱", "邮箱设置已保存。"),
                                                 ("en", "Permanent mailboxes", "Mailbox settings saved.")])
-async def test_mailbox_controls_execute_in_both_languages(isolated_env, locale, label, saved):
+@pytest.mark.parametrize("page", ["/mail", "/mail/projects"])
+async def test_mailbox_controls_execute_in_both_languages(isolated_env, locale, label, saved, page):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is required to execute the rendered JavaScript")
     await make_project()
     async with AsyncClient(transport=ASGITransport(app=build_http_app(get_settings())), base_url="http://test") as client:
-        html = (await client.get(f"/mail/projects?lang={locale}")).text
+        html = (await client.get(f"{page}?lang={locale}")).text
     script = re.search(r"<script>\s*(function mailboxManager\(\).*?)</script>", html, re.S)
     assert script is not None
     program = script.group(1) + "\n" + f"""
@@ -416,13 +429,27 @@ const assert = require('node:assert/strict');
   const manager = mailboxManager();
   assert.equal(manager.tabs[0].label, {json.dumps(label)});
   const original = manager.items[0];
+  const temporary = {{...original, id: original.id + 1, mailbox_type: 'temporary'}};
+  const trashed = {{...temporary, id: original.id + 2, mailbox_state: 'trash'}};
+  manager.items.push(temporary, trashed);
+  assert.equal(manager.count('all'), 2);
+  manager.category = 'trash';
+  assert.equal(manager.matches(trashed), true);
+  assert.equal(manager.matches(original), false);
+  manager.category = 'temporary';
+  assert.equal(manager.matches(temporary), true);
+  assert.equal(manager.matches(trashed), false);
+  manager.searchQuery = 'not-a-project';
+  assert.equal(manager.matches(temporary), false);
+  manager.searchQuery = '';
   const updated = {{...original, mailbox_type: 'temporary'}};
   let navigations = 0;
   global.window = {{location: {{
-    href: 'http://test/mail/projects?lang={locale}',
+    href: 'http://test{page}?lang={locale}',
     assign(url) {{
       const target = new URL(url);
-      assert.equal(target.pathname, '/mail/projects');
+      assert.equal(target.pathname, '{page}');
+      assert.equal(target.hash, {'"#projects"' if page == '/mail' else '""'});
       assert.equal(target.searchParams.get('category'), 'temporary');
       assert.equal(target.searchParams.get('lang'), '{locale}');
       navigations++;

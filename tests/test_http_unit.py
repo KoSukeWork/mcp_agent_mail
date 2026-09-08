@@ -123,6 +123,7 @@ def rendered_unified_inbox(request):
     try:
         html = env.get_template("mail_unified_inbox.html").render(
             _=gettext, current_locale=get_interface_locale, projects=[], messages=[],
+            project_cards=[], mailboxes=[], category="all",
         )
         yield locale, html
     finally:
