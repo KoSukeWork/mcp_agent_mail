@@ -32,6 +32,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Final, TypeVar, cast
 
+from sqlalchemy import inspect
+from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError, TimeoutError as SATimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
@@ -734,7 +736,7 @@ async def ensure_schema(settings: Settings | None = None) -> None:
     This is the pure SQLModel approach:
     - Models define the schema
     - create_all() creates tables that don't exist yet
-    - For schema changes: delete the DB and regenerate (dev) or use Alembic (prod)
+    - Explicit migrations update existing SQLite tables without deleting persisted data
 
     Also enables SQLite WAL mode for better concurrent access.
 
@@ -755,9 +757,40 @@ async def ensure_schema(settings: Settings | None = None) -> None:
             # Pure SQLModel: create tables from metadata
             # (WAL mode is set automatically via event listener in _build_engine)
             await conn.run_sync(SQLModel.metadata.create_all)
+            await conn.run_sync(_migrate_sqlite_project_lifecycle)
             # Setup FTS and custom indexes
             await conn.run_sync(_setup_fts)
         _schema_ready = True
+
+
+def _migrate_sqlite_project_lifecycle(connection: Connection) -> None:
+    """Add lifecycle metadata without changing identity, messages or archive state.
+
+    Inspect before ALTER rather than swallowing errors: disk/permission failures
+    must prevent startup from falsely declaring the schema ready.
+    """
+    if connection.dialect.name != "sqlite":
+        return
+    columns = {column["name"] for column in inspect(connection).get_columns("projects")}
+    definitions = {
+        "mailbox_type": "VARCHAR(16) NOT NULL DEFAULT 'permanent' CHECK (mailbox_type IN ('permanent', 'temporary'))",
+        "retention_days": "INTEGER NOT NULL DEFAULT 30 CHECK (retention_days BETWEEN 1 AND 3650)",
+        "last_activity_at": "DATETIME DEFAULT NULL",
+        "mailbox_state": "VARCHAR(16) NOT NULL DEFAULT 'active' CHECK (mailbox_state IN ('active', 'trash', 'purging'))",
+        "trashed_at": "DATETIME DEFAULT NULL",
+        "purge_after": "DATETIME DEFAULT NULL",
+    }
+    for name, definition in definitions.items():
+        if name not in columns:
+            connection.exec_driver_sql(f"ALTER TABLE projects ADD COLUMN {name} {definition}")
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_projects_mailbox_activity "
+        "ON projects (mailbox_type, mailbox_state, last_activity_at)"
+    )
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_projects_mailbox_purge "
+        "ON projects (mailbox_type, mailbox_state, purge_after)"
+    )
 
 
 def reset_database_state() -> None:

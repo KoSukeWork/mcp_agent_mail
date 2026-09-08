@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import Column, Index, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, Index, UniqueConstraint
 from sqlalchemy.types import JSON
 from sqlmodel import Field, SQLModel
 
@@ -22,12 +22,25 @@ def _utcnow_naive() -> datetime:
 
 class Project(SQLModel, table=True):
     __tablename__ = "projects"
+    __table_args__ = (
+        CheckConstraint("mailbox_type IN ('permanent', 'temporary')", name="ck_project_mailbox_type"),
+        CheckConstraint("retention_days BETWEEN 1 AND 3650", name="ck_project_retention_days"),
+        CheckConstraint("mailbox_state IN ('active', 'trash', 'purging')", name="ck_project_mailbox_state"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     slug: str = Field(index=True, unique=True, max_length=255)
     human_key: str = Field(max_length=255, index=True)
     created_at: datetime = Field(default_factory=_utcnow_naive)
     archived_at: Optional[datetime] = Field(default=None)
+    # Mailbox lifecycle is separate from manual archival. Defaults preserve all existing projects.
+    mailbox_type: str = Field(default="permanent", max_length=16, sa_column_kwargs={"server_default": "permanent"})
+    retention_days: int = Field(default=30, ge=1, le=3650, sa_column_kwargs={"server_default": "30"})
+    # A null activity baseline falls back to created_at; background polling must not update it.
+    last_activity_at: Optional[datetime] = Field(default=None)
+    mailbox_state: str = Field(default="active", max_length=16, sa_column_kwargs={"server_default": "active"})
+    trashed_at: Optional[datetime] = Field(default=None)
+    purge_after: Optional[datetime] = Field(default=None)
 
 class Product(SQLModel, table=True):
     """Logical grouping across multiple repositories for product-wide inbox/search and threads."""
