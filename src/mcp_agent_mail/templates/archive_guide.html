@@ -454,9 +454,9 @@
 <script>
 function copyToClipboard(text) {
   navigator.clipboard.writeText(text).then(() => {
-    showToast('Copied to clipboard!', 'success');
+      showToast({{ _('Copied to clipboard!') | tojson }}, 'success');
   }).catch(() => {
-    showToast('Failed to copy', 'error');
+      showToast({{ _('Failed to copy') | tojson }}, 'error');
   });
 }
 </script>

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
-from jinja2 import Environment, StrictUndefined, nodes
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, nodes
 
 from mcp_agent_mail import config as _config
 from mcp_agent_mail.http import SecurityAndRateLimitMiddleware, _decode_jwt_header_segment
@@ -18,6 +20,164 @@ from mcp_agent_mail.localization import (
     select_interface_locale,
     set_interface_locale,
 )
+
+
+def test_template_catalog_covers_translated_strings():
+    template_dir = Path(__file__).parents[1] / "src/mcp_agent_mail/templates"
+    env = Environment()
+    token = set_interface_locale("zh-CN")
+    try:
+        missing = set()
+        for path in template_dir.glob("*.html"):
+            tree = env.parse(path.read_text(encoding="utf-8"))
+            for call in tree.find_all(nodes.Call):
+                if (isinstance(call.node, nodes.Name) and call.node.name == "_"
+                        and call.args and isinstance(call.args[0], nodes.Const)):
+                    message = call.args[0].value
+                    # Technical column abbreviations are intentionally language-neutral.
+                    if message != "ID" and gettext(message) == message:
+                        missing.add(message)
+        assert not missing, "Missing Chinese translations:\n" + "\n".join(sorted(missing))
+    finally:
+        reset_interface_locale(token)
+
+
+class _UiScriptParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.scripts: list[tuple[str, str]] = []
+        self.expressions: list[str] = []
+        self.text_expressions: list[str] = []
+        self._script: list[str] | None = None
+        self._script_type = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        attributes = dict(attrs)
+        if tag == "script":
+            self._script = []
+            self._script_type = attributes.get("type") or ""
+        for key, value in attrs:
+            if value and (key == "x-text" or key.startswith(":")):
+                self.expressions.append(value)
+                if key == "x-text":
+                    self.text_expressions.append(value)
+
+    def handle_data(self, data: str):
+        if self._script is not None:
+            self._script.append(data)
+
+    def handle_endtag(self, tag: str):
+        if tag == "script" and self._script is not None:
+            source = "".join(self._script)
+            if source.strip():
+                self.scripts.append((self._script_type, source))
+            self._script = None
+
+
+@pytest.fixture(params=["zh-CN", "en"])
+def rendered_unified_inbox(request):
+    locale = request.param
+    env = Environment(
+        loader=FileSystemLoader(Path(__file__).parents[1] / "src/mcp_agent_mail/templates"),
+        autoescape=True, undefined=StrictUndefined,
+    )
+    token = set_interface_locale(locale)
+    try:
+        html = env.get_template("mail_unified_inbox.html").render(
+            _=gettext, current_locale=get_interface_locale, projects=[], messages=[],
+        )
+        yield locale, html
+    finally:
+        reset_interface_locale(token)
+
+
+def test_unified_inbox_dynamic_controls_render(rendered_unified_inbox):
+    locale, html = rendered_unified_inbox
+    parser = _UiScriptParser()
+    parser.feed(html)
+    fullscreen = next(expr for expr in parser.text_expressions if expr.startswith("isFullscreen ?"))
+    assert json.dumps(gettext("Fullscreen")) in fullscreen
+    assert json.dumps(gettext("Exit fullscreen")) in fullscreen
+    for source in ("Inbox refreshed", "Updated just now", "Updated {count}m ago"):
+        assert json.dumps(gettext(source)) in html
+    assert len(parser.scripts) >= 5
+    assert len(parser.expressions) > 10
+    if locale == "zh-CN":
+        assert '"Fullscreen"' not in fullscreen
+        assert "window.showToast('Inbox refreshed'" not in html
+        assert "共 0 个项目" in html
+
+
+def test_unified_inbox_dynamic_controls_execute(rendered_unified_inbox):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("JavaScript runtime checks require Node.js")
+    locale, html = rendered_unified_inbox
+    parser = _UiScriptParser()
+    parser.feed(html)
+    expected = [gettext(message) for message in (
+        "Refreshing…", "Awaiting first refresh", "Updated just now",
+        "Updated {count}s ago", "Updated {count}m ago", "Updated {count}h ago",
+        "Updated {count}d ago", "Inbox refreshed", "Refresh failed. Retrying soon.",
+        "Failed to refresh inbox", "Fullscreen", "Exit fullscreen",
+    )]
+    result = subprocess.run(
+        [node, "--experimental-vm-modules", "-e", r"""
+const {readFileSync} = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const {scripts, expressions, textExpressions, expected} = JSON.parse(readFileSync(0, 'utf8'));
+for (const [type, source] of scripts) {
+  if (type === 'module') new vm.SourceTextModule(source);
+  else if (!type || type === 'text/javascript') new vm.Script(source);
+}
+for (const expression of expressions) new Function(`return (${expression});`);
+const inbox = scripts.filter(([, source]) => source.includes('function unifiedInboxManager()'));
+assert.equal(inbox.length, 1);
+const toasts = [];
+const context = vm.createContext({
+  window: {showToast: text => toasts.push(text)},
+  console: {error() {}},
+  fetch: async () => ({ok: true, json: async () => ({messages: []})}),
+});
+vm.runInContext(inbox[0][1], context);
+const data = vm.runInContext('unifiedInboxManager()', context);
+data.isRefreshing = true;
+assert.equal(data.lastRefreshLabel, expected[0]);
+data.isRefreshing = false;
+data.lastRefreshTime = null;
+assert.equal(data.lastRefreshLabel, expected[1]);
+const ages = [0, 15, 120, 7200, 172800];
+const counts = [0, 15, 2, 2, 2];
+ages.forEach((seconds, i) => {
+  data.lastRefreshTime = new Date(Date.now() - seconds * 1000);
+  assert.equal(data.lastRefreshLabel, expected[i + 2].replace('{count}', counts[i]));
+});
+const fullscreen = textExpressions.find(expr => expr.startsWith('isFullscreen ?'));
+for (const [flag, label] of [[false, expected[10]], [true, expected[11]]]) {
+  context.isFullscreen = flag;
+  assert.equal(vm.runInContext(fullscreen, context), label);
+}
+data.filterMessages = () => { data.filteredMessages = [...data.allMessages]; };
+data.scheduleAutoRefresh = () => {};
+(async () => {
+  await data.fetchLatestMessages();
+  assert.equal(toasts.pop(), expected[7]);
+  assert.equal(data.refreshError, null);
+  context.fetch = async () => ({ok: false, status: 503});
+  await data.fetchLatestMessages();
+  assert.equal(toasts.pop(), expected[9]);
+  assert.equal(data.refreshError, expected[8]);
+  assert.equal(data.isRefreshing, false);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""],
+        input=json.dumps({
+            "scripts": parser.scripts, "expressions": parser.expressions,
+            "textExpressions": parser.text_expressions, "expected": expected,
+        }),
+        text=True, encoding="utf-8", capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, f"{locale}: {result.stderr}"
 
 
 @pytest.mark.parametrize("locale", ["zh-CN", "en"])

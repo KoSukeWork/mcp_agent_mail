@@ -2095,19 +2095,19 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         delta = now - created_dt
 
                         if delta.days < 0 or (delta.days == 0 and delta.seconds < 0):
-                            created_relative = "Just now"
+                            created_relative = gettext("Just now")
                         elif delta.days > 365:
-                            created_relative = f"{delta.days // 365}y ago"
+                            created_relative = gettext("{count}y ago").format(count=delta.days // 365)
                         elif delta.days > 30:
-                            created_relative = f"{delta.days // 30}mo ago"
+                            created_relative = gettext("{count}mo ago").format(count=delta.days // 30)
                         elif delta.days > 0:
-                            created_relative = f"{delta.days}d ago"
+                            created_relative = gettext("{count}d ago").format(count=delta.days)
                         elif delta.seconds > 3600:
-                            created_relative = f"{delta.seconds // 3600}h ago"
+                            created_relative = gettext("{count}h ago").format(count=delta.seconds // 3600)
                         elif delta.seconds > 60:
-                            created_relative = f"{delta.seconds // 60}m ago"
+                            created_relative = gettext("{count}m ago").format(count=delta.seconds // 60)
                         else:
-                            created_relative = "Just now"
+                            created_relative = gettext("Just now")
 
                         sender_display, sender_meta = _http_sender_identity(
                             message_project_id=r["message_project_id"],
@@ -2123,7 +2123,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                             "body_length": body_length,
                             "excerpt": excerpt,
                             "created_ts": str(r["created_ts"]),
-                            "created_full": created_dt.strftime("%B %d, %Y at %I:%M %p"),
+                            "created_full": created_dt.strftime(gettext("%B %d, %Y at %I:%M %p")),
                             "created_relative": created_relative,
                             "importance": r["importance"] or "normal",
                             "thread_id": r["thread_id"],

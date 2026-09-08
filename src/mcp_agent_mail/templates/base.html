@@ -155,6 +155,9 @@
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/relativeTime.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/calendar.min.js"></script>
+    {% if current_locale() == 'zh-CN' %}
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/locale/zh-cn.min.js"></script>
+    {% endif %}
 
     <!-- Tippy.js for beautiful tooltips -->
     <script src="https://unpkg.com/@popperjs/core@2"></script>
@@ -1008,10 +1011,10 @@
                  @keydown.up.prevent="selectPrevious()"
                  @keydown.enter.prevent="executeSelected()"
                  type="text"
-                 placeholder="Search commands, navigate, or type '?' for help..."
+                 placeholder="{{ _("Search commands, navigate, or type '?' for help...") }}"
                  class="w-full pl-14 pr-4 py-5 bg-transparent border-0 text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:outline-none text-lg"
                  autocomplete="off"
-                 aria-label="Command palette search" />
+                 aria-label="{{ _('Command palette search') }}" />
         </div>
 
         <!-- Results -->
@@ -1019,7 +1022,7 @@
           <template x-if="filteredCommands.length === 0">
             <div class="p-8 text-center text-slate-500 dark:text-slate-400">
               <i data-lucide="inbox" class="w-12 h-12 mx-auto mb-3 opacity-50"></i>
-              <p>No commands found. Try different keywords.</p>
+            <p>{{ _('No commands found. Try different keywords.') }}</p>
             </div>
           </template>
 
@@ -1053,15 +1056,15 @@
           <div class="flex items-center gap-4">
             <div class="flex items-center gap-1">
               <kbd class="px-2 py-1 bg-white dark:bg-slate-800 rounded border border-slate-300 dark:border-slate-600">↑↓</kbd>
-              <span>Navigate</span>
+            <span>{{ _('Navigate') }}</span>
             </div>
             <div class="flex items-center gap-1">
               <kbd class="px-2 py-1 bg-white dark:bg-slate-800 rounded border border-slate-300 dark:border-slate-600">↵</kbd>
-              <span>Select</span>
+            <span>{{ _('Select') }}</span>
             </div>
             <div class="flex items-center gap-1">
               <kbd class="px-2 py-1 bg-white dark:bg-slate-800 rounded border border-slate-300 dark:border-slate-600">Esc</kbd>
-              <span>Close</span>
+            <span>{{ _('Close') }}</span>
             </div>
           </div>
           <div class="text-slate-500">
@@ -1943,8 +1946,8 @@
               <i data-lucide="keyboard" class="w-6 h-6"></i>
             </div>
             <div>
-              <h2 class="text-2xl font-bold">Keyboard Shortcuts</h2>
-              <p class="text-primary-100 text-sm">Work faster with keyboard navigation</p>
+              <h2 class="text-2xl font-bold">{{ _('Keyboard Shortcuts') }}</h2>
+              <p class="text-primary-100 text-sm">{{ _('Work faster with keyboard navigation') }}</p>
             </div>
           </div>
           <button @click="showShortcuts = false"
@@ -1960,23 +1963,23 @@
             <div>
               <h3 class="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wide mb-4 flex items-center gap-2">
                 <i data-lucide="globe" class="w-4 h-4 text-primary-600"></i>
-                Global
+                {{ _('Global') }}
               </h3>
               <div class="space-y-3">
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Command palette</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Command Palette') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">⌘K</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">This help panel</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('This help panel') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">?</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Focus search</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Focus search') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">/</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Go to projects</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Go to Projects') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">G+P</kbd>
                 </div>
               </div>
@@ -1986,23 +1989,23 @@
             <div>
               <h3 class="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wide mb-4 flex items-center gap-2">
                 <i data-lucide="compass" class="w-4 h-4 text-success-600"></i>
-                Navigation
+                {{ _('Navigation') }}
               </h3>
               <div class="space-y-3">
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Next item</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Next item') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">J</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Previous item</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Previous item') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">K</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Open item</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Open item') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">Enter</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Go back</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Go back') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">Esc</kbd>
                 </div>
               </div>
@@ -2012,19 +2015,19 @@
             <div>
               <h3 class="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wide mb-4 flex items-center gap-2">
                 <i data-lucide="zap" class="w-4 h-4 text-warning-600"></i>
-                Actions
+                {{ _('Actions') }}
               </h3>
               <div class="space-y-3">
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Refresh</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Refresh') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">R</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Copy to clipboard</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Copy to clipboard') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">⌘C</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Toggle dark mode</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Toggle dark mode') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">D</kbd>
                 </div>
               </div>
@@ -2034,19 +2037,19 @@
             <div>
               <h3 class="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wide mb-4 flex items-center gap-2">
                 <i data-lucide="mail" class="w-4 h-4 text-danger-600"></i>
-                Messages
+                {{ _('Messages') }}
               </h3>
               <div class="space-y-3">
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Reply</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Reply') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">Shift+R</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Forward</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Forward') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">Shift+F</kbd>
                 </div>
                 <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                  <span class="text-sm text-slate-700 dark:text-slate-300">Mark as read</span>
+                  <span class="text-sm text-slate-700 dark:text-slate-300">{{ _('Mark as read') }}</span>
                   <kbd class="px-2 py-1 bg-white dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600 text-xs">E</kbd>
                 </div>
               </div>
@@ -2059,7 +2062,7 @@
     <!-- Enhanced Toast Notification Container with Progress Bars -->
     <div x-data="toastManager()" @toast.window="show($event.detail)"
          class="fixed top-4 right-4 z-50 space-y-3 max-w-md"
-         role="region" aria-label="Notifications">
+         role="region" aria-label="{{ _('Notifications') }}">
       <template x-for="toast in toasts" :key="toast.id">
         <div x-show="toast.visible"
              x-transition:enter="transition ease-out duration-300 transform"
@@ -2120,7 +2123,7 @@
                             'bg-warning-600 hover:bg-warning-700 text-white': toast.type === 'warning',
                             'bg-primary-600 hover:bg-primary-700 text-white': toast.type === 'info'
                           }"
-                          x-text="toast.actionText || 'Action'">
+                        x-text='toast.actionText || {{ _("Action") | tojson }}'>
                   </button>
                 </div>
               </div>
@@ -2128,7 +2131,7 @@
               <!-- Close button -->
               <button @click="remove(toast.id)"
                       class="flex-shrink-0 p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                      aria-label="Close notification">
+                    aria-label="{{ _('Close notification') }}">
                 <i data-lucide="x" class="w-4 h-4"></i>
               </button>
             </div>
@@ -2176,8 +2179,8 @@
             <!-- Help Button -->
             <button onclick="window.restartTutorial()"
                     class="p-2 rounded-lg hover:bg-primary-100 dark:hover:bg-primary-900/30 text-primary-600 dark:text-primary-400 transition-all duration-200 relative group"
-                    data-tippy-content="Show interactive tutorial"
-                    aria-label="Show help">
+                  data-tippy-content="{{ _('Show interactive tutorial') }}"
+                  aria-label="{{ _('Show help') }}">
               <i data-lucide="help-circle" class="w-5 h-5"></i>
               <!-- Pulsing indicator for first-time users -->
               <span class="absolute -top-1 -right-1 w-3 h-3 bg-success-500 rounded-full animate-pulse"
@@ -2196,8 +2199,8 @@
           <!-- Dark Mode Toggle -->
             <button @click="toggleDarkMode()"
                     class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                    data-tippy-content="Toggle dark/light mode"
-                    aria-label="Toggle dark mode">
+                  data-tippy-content="{{ _('Toggle dark/light mode') }}"
+                  aria-label="{{ _('Toggle dark mode') }}">
               <svg x-show="!darkMode" xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
               </svg>
@@ -2590,8 +2593,8 @@
             // Navigation Commands
             {
               id: 'nav-projects',
-              title: 'Go to Projects',
-              description: 'View all projects',
+              title: {{ _('Go to Projects') | tojson }},
+              description: {{ _('View all projects') | tojson }},
               icon: 'folder',
               iconBg: 'rgba(99, 102, 241, 0.1)',
               iconColor: 'text-primary-600',
@@ -2601,8 +2604,8 @@
             },
             {
               id: 'nav-search',
-              title: 'Search Messages',
-              description: 'Find messages across projects',
+              title: {{ _('Search Messages') | tojson }},
+              description: {{ _('Find messages across projects') | tojson }},
               icon: 'search',
               iconBg: 'rgba(139, 92, 246, 0.1)',
               iconColor: 'text-purple-600',
@@ -2615,8 +2618,8 @@
             },
             {
               id: 'toggle-dark',
-              title: 'Toggle Dark Mode',
-              description: 'Switch between light and dark themes',
+              title: {{ _('Toggle dark mode') | tojson }},
+              description: {{ _('Switch between light and dark themes') | tojson }},
               icon: 'moon',
               iconBg: 'rgba(234, 179, 8, 0.1)',
               iconColor: 'text-yellow-600',
@@ -2635,8 +2638,8 @@
             },
             {
               id: 'refresh',
-              title: 'Refresh Page',
-              description: 'Reload current page',
+              title: {{ _('Refresh Page') | tojson }},
+              description: {{ _('Reload current page') | tojson }},
               icon: 'refresh-cw',
               iconBg: 'rgba(16, 185, 129, 0.1)',
               iconColor: 'text-success-600',
@@ -2646,8 +2649,8 @@
             },
             {
               id: 'show-shortcuts',
-              title: 'Keyboard Shortcuts',
-              description: 'View all keyboard shortcuts',
+              title: {{ _('Keyboard Shortcuts') | tojson }},
+              description: {{ _('View all keyboard shortcuts') | tojson }},
               icon: 'keyboard',
               iconBg: 'rgba(236, 72, 153, 0.1)',
               iconColor: 'text-pink-600',
@@ -2675,14 +2678,14 @@
             // Action Commands
             {
               id: 'copy-url',
-              title: 'Copy Page URL',
-              description: 'Copy current page URL to clipboard',
+              title: {{ _('Copy Page URL') | tojson }},
+              description: {{ _('Copy current page URL to clipboard') | tojson }},
               icon: 'link',
               iconBg: 'rgba(59, 130, 246, 0.1)',
               iconColor: 'text-blue-600',
               action: () => {
                 navigator.clipboard.writeText(window.location.href);
-                window.showToast('URL copied to clipboard!', 'success', 2000);
+                  window.showToast({{ _('URL copied to clipboard!') | tojson }}, 'success', 2000);
               },
               keywords: 'copy url link clipboard share'
             }
@@ -2917,7 +2920,7 @@
       // Show loading toast (doesn't auto-dismiss)
       window.showLoadingToast = function(message, title = null) {
         window.showToast(message, 'info', 0, {
-          title: title || 'Loading',
+        title: title || {{ _('Loading') | tojson }},
           showProgress: true
         });
       };
@@ -3187,7 +3190,7 @@
       });
 
       // Add visual feedback for copy actions with fallback
-      window.copyToClipboard = async function(text, successMessage = 'Copied to clipboard!') {
+    window.copyToClipboard = async function(text, successMessage = {{ _('Copied to clipboard!') | tojson }}) {
         // Modern clipboard API (requires HTTPS)
         if (navigator.clipboard && window.isSecureContext) {
           try {
@@ -3220,12 +3223,18 @@
           }
         } catch (err) {
           console.error('Fallback copy failed:', err);
-          window.showToast('Failed to copy', 'error', 2000);
+            window.showToast({{ _('Failed to copy') | tojson }}, 'error', 2000);
           return false;
         }
       };
 
       // Relative time formatting helper
+      if (typeof dayjs !== 'undefined') {
+        if (typeof dayjs_plugin_relativeTime !== 'undefined') dayjs.extend(dayjs_plugin_relativeTime);
+        if (typeof dayjs_plugin_calendar !== 'undefined') dayjs.extend(dayjs_plugin_calendar);
+        dayjs.locale({{ ('zh-cn' if current_locale() == 'zh-CN' else 'en') | tojson }});
+      }
+
       window.formatRelativeTime = function(dateString) {
         if (typeof dayjs === 'undefined') return dateString;
         try {
@@ -3241,7 +3250,14 @@
       window.formatCalendarTime = function(dateString) {
         if (typeof dayjs === 'undefined') return dateString;
         try {
-          const result = dayjs(dateString).calendar();
+          const result = dayjs(dateString).calendar(null, {
+            sameDay: {{ _('[Today at] h:mm A') | tojson }},
+            nextDay: {{ _('[Tomorrow at] h:mm A') | tojson }},
+            nextWeek: {{ _('dddd [at] h:mm A') | tojson }},
+            lastDay: {{ _('[Yesterday at] h:mm A') | tojson }},
+            lastWeek: {{ _('[Last] dddd [at] h:mm A') | tojson }},
+            sameElse: {{ _('MM/DD/YYYY') | tojson }},
+          });
           return result || dateString;
         } catch (e) {
           console.error('formatCalendarTime error:', e);

@@ -743,13 +743,13 @@
         }
 
         if (status === 'confirmed') {
-          window.showToast('Projects linked successfully', 'success', 2500);
+              window.showToast({{ _('Projects linked successfully') | tojson }}, 'success', 2500);
         } else if (status === 'dismissed') {
-          window.showToast('Suggestion dismissed', 'info', 2000);
+              window.showToast({{ _('Suggestion dismissed') | tojson }}, 'info', 2000);
         } else if (isReset) {
-          window.showToast('Link undone', 'info', 2000);
+              window.showToast({{ _('Link undone') | tojson }}, 'info', 2000);
         } else {
-          window.showToast('Relationship updated', 'success', 2000);
+              window.showToast({{ _('Relationship updated') | tojson }}, 'success', 2000);
         }
 
         // Update visibility on both cards
@@ -757,7 +757,7 @@
         toggleContainerVisibility(findCard(otherId));
       } catch (error) {
         console.error('Sibling action failed', error);
-        window.showToast(error.message || 'Unable to update suggestion', 'error', 3000);
+            window.showToast(error.message || {{ _('Unable to update suggestion') | tojson }}, 'error', 3000);
         button.innerHTML = originalHTML;
         allButtons.forEach(btn => {
           btn.disabled = false;

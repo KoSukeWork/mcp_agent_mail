@@ -93,10 +93,10 @@
     <button @click="isFullscreen = !isFullscreen"
             :class="isFullscreen ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 border-primary-300 dark:border-primary-700' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-primary-300 dark:hover:border-primary-700'"
             class="px-4 py-2.5 border rounded-lg transition-all duration-200 flex items-center gap-2 font-medium shadow-sm hover:shadow-md"
-            :aria-label="isFullscreen ? {{ _("Exit fullscreen") | tojson }} : {{ _("Enter fullscreen") | tojson }}">
+            :aria-label='isFullscreen ? {{ _("Exit fullscreen") | tojson }} : {{ _("Enter fullscreen") | tojson }}'>
       <i x-show="!isFullscreen" data-lucide="maximize-2" class="w-4 h-4"></i>
       <i x-show="isFullscreen" data-lucide="minimize-2" class="w-4 h-4"></i>
-      <span class="hidden lg:inline" x-text="isFullscreen ? 'Exit' : 'Fullscreen'"></span>
+        <span class="hidden lg:inline" x-text='isFullscreen ? {{ _("Exit fullscreen") | tojson }} : {{ _("Fullscreen") | tojson }}'></span>
     </button>
 
     <!-- Refresh Controls -->
@@ -129,7 +129,7 @@
     <!-- Message Count -->
     <div class="hidden md:flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
       <span class="font-semibold text-slate-900 dark:text-white" x-text="filteredMessages.length"></span>
-      <span x-text="filteredMessages.length === 1 ? 'message' : 'messages'"></span>
+        <span x-text='filteredMessages.length === 1 ? {{ _("message") | tojson }} : {{ _("messages") | tojson }}'></span>
     </div>
   </div>
 
@@ -238,10 +238,10 @@
                    updateIndeterminate();
                  "
                  class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 rounded focus:ring-2 focus:ring-primary-500 transition-all duration-200 cursor-pointer"
-                 aria-label="Select all messages">
+                 aria-label="{{ _('Select all messages') }}">
           <template x-if="selectedMessages.length > 0">
             <div class="flex items-center gap-2 text-sm animate-slide-in">
-              <span class="font-semibold text-primary-600 dark:text-primary-400" x-text="selectedMessages.length + ' selected'"></span>
+              <span class="font-semibold text-primary-600 dark:text-primary-400" x-text='{{ _("{count} selected") | tojson }}.replace("{count}", selectedMessages.length)'></span>
               <button @click="markSelectedAsRead()"
                       class="px-2 py-1 text-xs bg-success-100 dark:bg-success-900/30 hover:bg-success-200 dark:hover:bg-success-800/40 text-success-700 dark:text-success-300 rounded font-medium transition-colors flex items-center gap-1">
                 <i data-lucide="check" class="w-3 h-3"></i>
@@ -265,7 +265,7 @@
           <button @click="sortOpen = !sortOpen"
                   class="px-2 py-1 text-xs bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700 transition-colors flex items-center gap-1">
             <i data-lucide="arrow-down-up" class="w-3 h-3"></i>
-            <span class="hidden sm:inline" x-text="sortBy === 'newest' ? 'Newest' : sortBy === 'oldest' ? 'Oldest' : sortBy === 'longest' ? 'Longest' : 'Sender'"></span>
+            <span class="hidden sm:inline" x-text='sortBy === "newest" ? {{ _("Newest") | tojson }} : sortBy === "oldest" ? {{ _("Oldest") | tojson }} : sortBy === "longest" ? {{ _("Longest") | tojson }} : {{ _("Sender") | tojson }}'></span>
           </button>
 
           <div x-show="sortOpen"
@@ -320,7 +320,7 @@
                    :style="`animation-delay: ${Math.min(index * 0.02, 0.5)}s;`"
                    tabindex="0"
                    role="button"
-                   :aria-label="'Message from ' + msg.sender + ': ' + msg.subject">
+               :aria-label='{{ _("Message from {sender}: {subject}") | tojson }}.replace("{sender}", () => msg.sender).replace("{subject}", () => msg.subject)'>
 
                 <div class="flex items-start gap-3">
                   <!-- Checkbox -->
@@ -578,7 +578,7 @@
     <div class="flex items-center justify-between mb-6">
       <div>
         <h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-2">{{ _("Your Projects") }}</h2>
-        <p class="text-slate-600 dark:text-slate-400">{{ projects|length }} project{{ 's' if projects|length != 1 else '' }} in total</p>
+      <p class="text-slate-600 dark:text-slate-400">{{ _('{count} project(s) in total').format(count=projects|length) }}</p>
       </div>
 
       {% if projects|length > 0 %}
@@ -645,7 +645,7 @@
               class="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors mb-4">
         <i data-lucide="chevron-right" class="w-4 h-4 transition-transform duration-200" :class="showArchived ? 'rotate-90' : ''"></i>
         <i data-lucide="archive" class="w-4 h-4"></i>
-        {{ archived_projects|length }} Archived Project{{ 's' if archived_projects|length != 1 else '' }}
+                  {{ _('{count} archived project(s)').format(count=archived_projects|length) }}
       </button>
       <div x-show="showArchived" x-collapse>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -782,28 +782,28 @@ function unifiedInboxManager() {
 
     get lastRefreshLabel() {
       if (this.isRefreshing) {
-        return 'Refreshing…';
+        return {{ _('Refreshing…') | tojson }};
       }
       if (!this.lastRefreshTime) {
-        return 'Awaiting first refresh';
+        return {{ _('Awaiting first refresh') | tojson }};
       }
       const diffSeconds = Math.floor((Date.now() - this.lastRefreshTime.getTime()) / 1000);
       if (diffSeconds < 10) {
-        return 'Updated just now';
+        return {{ _('Updated just now') | tojson }};
       }
       if (diffSeconds < 60) {
-        return `Updated ${diffSeconds}s ago`;
+        return {{ _('Updated {count}s ago') | tojson }}.replace('{count}', diffSeconds);
       }
       const diffMinutes = Math.floor(diffSeconds / 60);
       if (diffMinutes < 60) {
-        return `Updated ${diffMinutes}m ago`;
+        return {{ _('Updated {count}m ago') | tojson }}.replace('{count}', diffMinutes);
       }
       const diffHours = Math.floor(diffMinutes / 60);
       if (diffHours < 24) {
-        return `Updated ${diffHours}h ago`;
+        return {{ _('Updated {count}h ago') | tojson }}.replace('{count}', diffHours);
       }
       const diffDays = Math.floor(diffHours / 24);
-      return `Updated ${diffDays}d ago`;
+      return {{ _('Updated {count}d ago') | tojson }}.replace('{count}', diffDays);
     },
 
     init() {
@@ -1077,13 +1077,13 @@ function unifiedInboxManager() {
         this.lastRefreshTime = new Date();
 
         if (!silent && typeof window.showToast === 'function') {
-          window.showToast('Inbox refreshed', 'success');
+          window.showToast({{ _('Inbox refreshed') | tojson }}, 'success');
         }
       } catch (error) {
         console.error('Unified inbox refresh failed:', error);
-        this.refreshError = 'Refresh failed. Retrying soon.';
+        this.refreshError = {{ _('Refresh failed. Retrying soon.') | tojson }};
         if (!silent && typeof window.showToast === 'function') {
-          window.showToast('Failed to refresh inbox', 'error');
+          window.showToast({{ _('Failed to refresh inbox') | tojson }}, 'error');
         }
       } finally {
         this.isRefreshing = false;
@@ -1206,7 +1206,7 @@ function unifiedInboxManager() {
                   await navigator.clipboard.writeText(pre.textContent);
                   button.innerHTML = '<i data-lucide="check" class="w-4 h-4"></i>';
                   if (typeof window.showToast === 'function') {
-                    window.showToast('Code copied!', 'success');
+                      window.showToast({{ _('Code copied!') | tojson }}, 'success');
                   }
                   setTimeout(() => {
                     button.innerHTML = '<i data-lucide="copy" class="w-4 h-4"></i>';
@@ -1218,13 +1218,13 @@ function unifiedInboxManager() {
                   // Fallback for browsers without clipboard API
                   console.warn('Clipboard API not available');
                   if (typeof window.showToast === 'function') {
-                    window.showToast('Clipboard not supported in this browser', 'error');
+                    window.showToast({{ _('Clipboard not supported in this browser') | tojson }}, 'error');
                   }
                 }
               } catch (error) {
                 console.error('Failed to copy code:', error);
                 if (typeof window.showToast === 'function') {
-                  window.showToast('Failed to copy code', 'error');
+                  window.showToast({{ _('Failed to copy code') | tojson }}, 'error');
                 }
               }
             };
@@ -1279,7 +1279,7 @@ function unifiedInboxManager() {
     markSelectedAsRead() {
       if (this.selectedMessages.length === 0) return;
       if (typeof window.showToast === 'function') {
-        window.showToast(`Marked ${this.selectedMessages.length} message(s) as read`, 'success');
+        window.showToast({{ _('Marked {count} message(s) as read') | tojson }}.replace('{count}', this.selectedMessages.length), 'success');
       }
       this.selectedMessages = [];
     },
@@ -1288,7 +1288,7 @@ function unifiedInboxManager() {
       if (this.selectedMessages.length === 0) return;
 
       const count = this.selectedMessages.length;
-      const confirmMsg = `Permanently delete ${count} selected message${count !== 1 ? 's' : ''}? This removes them from the database and Git archive and cannot be undone.`;
+      const confirmMsg = {{ _('Permanently delete {count} selected message(s)? This removes them from the database and Git archive and cannot be undone.') | tojson }}.replace('{count}', count);
       if (!confirm(confirmMsg)) return;
 
       try {
@@ -1300,7 +1300,7 @@ function unifiedInboxManager() {
 
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
-          throw new Error(error.detail || error.error || `Server error: ${response.status}`);
+          throw new Error(error.detail || error.error || {{ _('Server error: {status}') | tojson }}.replace('{status}', response.status));
         }
 
         const result = await response.json();
@@ -1308,7 +1308,7 @@ function unifiedInboxManager() {
 
         if (typeof window.showToast === 'function') {
           window.showToast(
-            `Permanently deleted ${deletedCount} message${deletedCount !== 1 ? 's' : ''}`,
+            {{ _('Permanently deleted {count} message(s)') | tojson }}.replace('{count}', deletedCount),
             'success'
           );
         } else {
@@ -1328,7 +1328,7 @@ function unifiedInboxManager() {
         console.error('Failed to delete messages:', error);
 
         if (typeof window.showToast === 'function') {
-          window.showToast(`Failed to delete messages: ${error.message}`, 'error');
+          window.showToast({{ _('Failed to delete messages: {error}') | tojson }}.replace('{error}', error.message), 'error');
         } else {
           alert(`Failed to delete messages: ${error.message}`);
         }
@@ -1342,16 +1342,16 @@ function unifiedInboxManager() {
       const messageId = encodeURIComponent(String(msg.id));
       const url = `${window.location.origin}/mail/${projectSlug}/message/${messageId}`;
       if (typeof window.copyToClipboard === 'function') {
-        window.copyToClipboard(url, 'Message link copied!');
+        window.copyToClipboard(url, {{ _('Message link copied!') | tojson }});
       } else if (navigator.clipboard && navigator.clipboard.writeText) {
         // Fallback to direct clipboard API
         navigator.clipboard.writeText(url).then(() => {
           if (typeof window.showToast === 'function') {
-            window.showToast('Message link copied!', 'success');
+          window.showToast({{ _('Message link copied!') | tojson }}, 'success');
           }
         }).catch(() => {
           if (typeof window.showToast === 'function') {
-            window.showToast('Failed to copy link', 'error');
+          window.showToast({{ _('Failed to copy link') | tojson }}, 'error');
           }
         });
       }

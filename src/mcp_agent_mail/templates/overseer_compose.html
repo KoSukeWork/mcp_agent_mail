@@ -306,7 +306,7 @@ Please investigate the following:
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
         </svg>
         <i x-show="!sending" data-lucide="send" class="w-4 h-4"></i>
-        <span x-text="sending ? {{ _("Sending...") | tojson }} : {{ _("Send to") | tojson }} + ' ' + selectedRecipients.length + ' ' + (selectedRecipients.length !== 1 ? {{ _("agents") | tojson }} : {{ _("agent") | tojson }})">{{ _("Send Message") }}</span>
+          <span x-text='sending ? {{ _("Sending...") | tojson }} : {{ _("Send to {count} agent(s)") | tojson }}.replace("{count}", selectedRecipients.length)'>{{ _("Send Message") }}</span>
       </button>
     </div>
   </form>
@@ -358,7 +358,7 @@ Please investigate the following:
         <div class="p-6 space-y-3">
           <div class="flex items-center justify-between text-sm">
             <span class="text-slate-600 dark:text-slate-400">{{ _("Recipients:") }}</span>
-            <span class="font-medium text-slate-900 dark:text-white" x-text="selectedRecipients.length + ' agent' + (selectedRecipients.length !== 1 ? 's' : '')"></span>
+              <span class="font-medium text-slate-900 dark:text-white" x-text='{{ _("{count} agent(s)") | tojson }}.replace("{count}", selectedRecipients.length)'></span>
           </div>
           <div class="flex items-start justify-between text-sm gap-3">
             <span class="text-slate-600 dark:text-slate-400 flex-shrink-0">{{ _("Subject:") }}</span>

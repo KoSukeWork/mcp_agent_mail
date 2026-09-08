@@ -220,7 +220,7 @@
                     await navigator.clipboard.writeText(pre.textContent);
                     button.innerHTML = '<i data-lucide="check" class="w-4 h-4"></i>';
                     if (typeof showToast === 'function') {
-                      showToast('Code copied!', 'success');
+                showToast({{ _('Code copied!') | tojson }}, 'success');
                     }
                     setTimeout(() => {
                       button.innerHTML = '<i data-lucide="copy" class="w-4 h-4"></i>';
@@ -234,7 +234,7 @@
                 } catch (err) {
                   console.error('Copy failed:', err);
                   if (typeof showToast === 'function') {
-                    showToast('Failed to copy code', 'error');
+              showToast({{ _('Failed to copy code') | tojson }}, 'error');
                   }
                 }
               };

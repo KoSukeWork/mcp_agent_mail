@@ -165,7 +165,7 @@
                 data-tippy-content="{{ _("Toggle advanced search filters") }}">
         <i x-show="!isExpanded" data-lucide="chevron-down" class="w-4 h-4" x-cloak></i>
         <i x-show="isExpanded" data-lucide="chevron-up" class="w-4 h-4" x-cloak></i>
-        <span x-text="isExpanded ? 'Hide Advanced Filters' : 'Show Advanced Filters'" class="text-sm font-medium"></span>
+        <span x-text='isExpanded ? {{ _("Hide Advanced Filters") | tojson }} : {{ _("Show Advanced Filters") | tojson }}' class="text-sm font-medium"></span>
       </button>
     </div>
 
@@ -418,7 +418,7 @@
                 <i data-lucide="inbox" class="w-4 h-4"></i>
                     <span>{{ _("Inbox") }}</span>
               </a>
-              <button onclick="copyToClipboard(this.dataset.agentName, 'Agent name copied!')"
+                  <button onclick='copyToClipboard(this.dataset.agentName, {{ _("Agent name copied!") | tojson }})'
                       data-agent-name="{{ a.name }}"
                       class="p-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md"
                       data-tippy-content="{{ _("Copy agent name") }}"

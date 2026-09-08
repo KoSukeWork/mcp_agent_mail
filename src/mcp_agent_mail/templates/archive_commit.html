@@ -185,9 +185,9 @@
 <script>
 function copyToClipboard(text) {
   navigator.clipboard.writeText(text).then(() => {
-    showToast('SHA copied to clipboard!', 'success');
+      showToast({{ _('SHA copied to clipboard!') | tojson }}, 'success');
   }).catch(() => {
-    showToast('Failed to copy', 'error');
+      showToast({{ _('Failed to copy') | tojson }}, 'error');
   });
 }
 
