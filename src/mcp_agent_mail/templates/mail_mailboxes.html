@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}{{ _('Mailboxes') }} - MCP Agent Mail{% endblock %}
+{% block content %}
+<section class="max-w-7xl mx-auto px-4 py-6" x-data="mailboxManager()">
+  <h1 class="text-2xl font-bold mb-3">{{ _('Mailboxes') }}</h1>
+  <p class="text-sm text-slate-500 mb-5">{{ _('Permanent mailboxes retain their history. Temporary mailboxes expire after inactivity and stay in the recycle bin for 7 days.') }}</p>
+  <div class="flex flex-wrap gap-2 mb-6" role="tablist" aria-label="{{ _('Mailbox category') }}">
+    <template x-for="tab in tabs" :key="tab.key">
+      <button type="button" role="tab" class="rounded-lg border px-4 py-2 whitespace-nowrap" :class="category === tab.key ? 'bg-blue-600 text-white' : ''" :aria-selected="category === tab.key" @click="category = tab.key">
+        <span x-text="tab.label"></span> (<span x-text="items.filter(p => group(p) === tab.key).length"></span>)
+      </button>
+    </template>
+  </div>
+  <p role="status" class="mb-4 text-sm" x-text="notice"></p>
+  <p x-show="!items.some(p => group(p) === category)" class="text-slate-500 py-8">{{ _('No mailboxes in this category.') }}</p>
+  <div class="grid gap-4">
+    <template x-for="p in items.filter(p => group(p) === category)" :key="p.id">
+      <article class="rounded-xl border border-slate-300 dark:border-slate-700 p-4 min-w-0">
+        <div class="flex flex-wrap justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <a x-show="p.mailbox_state === 'active'" :href="'/mail/' + encodeURIComponent(p.slug)" class="font-semibold text-blue-600 break-all" x-text="p.human_key"></a>
+            <span x-show="p.mailbox_state !== 'active'" class="font-semibold break-all" x-text="p.human_key"></span>
+            <p class="text-xs text-slate-500 mt-1 break-all" x-text="p.slug"></p>
+          </div>
+          <span x-show="p.mailbox_state === 'purging'" class="text-amber-600">{{ _('Cleanup in progress') }}</span>
+          <a x-show="p.mailbox_state === 'active'" :href="'/mail/activity?project_id=' + p.id" class="text-blue-600 text-sm">{{ _('Database activity') }}</a>
+        </div>
+        <div class="mt-3 text-sm text-slate-500 space-y-1">
+          <p>{{ _('Last effective activity') }}: <span x-text="date(p.last_activity_at)"></span></p>
+          <p x-show="p.expires_at">{{ _('Expires at') }}: <span x-text="date(p.expires_at)"></span></p>
+          <p x-show="p.purge_after">{{ _('Scheduled cleanup') }}: <span x-text="date(p.purge_after)"></span></p>
+          <p x-show="p.mailbox_type === 'permanent'">{{ _('Never expires automatically') }}</p>
+          <p x-show="p.cleanup_error" class="text-amber-600">{{ _('Cleanup paused to protect data. Restore this mailbox or check the server maintenance log.') }}</p>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-3 items-center" x-show="p.mailbox_state !== 'purging'">
+          <label x-show="p.mailbox_type === 'temporary' && p.mailbox_state === 'active'" class="text-sm">
+            {{ _('Inactivity days') }}
+            <input type="number" min="1" max="3650" x-model.number="p.retention_days" class="border rounded px-2 py-1 w-24 text-slate-900" :disabled="busy">
+          </label>
+          <button x-show="p.mailbox_type === 'temporary' && p.mailbox_state === 'active'" :disabled="busy" @click="change(p, {retention_days: p.retention_days})" class="border rounded px-3 py-1">{{ _('Save') }}</button>
+          <button x-show="p.mailbox_type === 'permanent'" :disabled="busy" @click="change(p, {mailbox_type: 'temporary'})" class="border rounded px-3 py-1">{{ _('Make temporary') }}</button>
+          <button x-show="p.mailbox_type === 'temporary'" :disabled="busy" @click="change(p, {mailbox_type: 'permanent'})" class="border rounded px-3 py-1">{{ _('Keep permanently') }}</button>
+          <button x-show="p.mailbox_state === 'trash'" :disabled="busy" @click="change(p, {action: 'restore'})" class="border rounded px-3 py-1">{{ _('Restore mailbox') }}</button>
+          <button x-show="p.mailbox_type === 'temporary' && p.mailbox_state === 'active'" :disabled="busy" @click="trash(p)" class="border rounded px-3 py-1 text-red-600">{{ _('Move to recycle bin') }}</button>
+        </div>
+      </article>
+    </template>
+  </div>
+</section>
+<script>
+function mailboxManager() {
+  return {
+    items: {{ mailboxes | tojson }}, category: 'permanent', busy: false, notice: '',
+    tabs: [
+      {key: 'permanent', label: {{ _('Permanent mailboxes') | tojson }}},
+      {key: 'temporary', label: {{ _('Temporary mailboxes') | tojson }}},
+      {key: 'trash', label: {{ _('Recycle bin') | tojson }}}
+    ],
+    group(p) { return p.mailbox_state === 'active' ? p.mailbox_type : 'trash'; },
+    date(value) { return value ? new Date(value).toLocaleString({{ current_locale() | tojson }}) : '—'; },
+    async trash(p) {
+      if (confirm({{ _('Move this temporary mailbox to the recycle bin? It will be permanently cleaned up after 7 days.') | tojson }})) await this.change(p, {action: 'trash'});
+    },
+    async change(p, body) {
+      if (this.busy) return;
+      this.busy = true; this.notice = '';
+      try {
+        const response = await fetch('/mail/api/mailboxes/' + p.id, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+        });
+        if (!response.ok) throw new Error('request failed');
+        const updated = await response.json();
+        this.items = this.items.map(item => item.id === p.id ? updated : item);
+        this.category = this.group(updated);
+        this.notice = {{ _('Mailbox settings saved.') | tojson }};
+      } catch (_) { this.notice = {{ _('Unable to update mailbox. Refresh the page and try again.') | tojson }}; }
+      finally { this.busy = false; }
+    }
+  };
+}
+</script>
+{% endblock %}

@@ -3893,7 +3893,7 @@ def amctl_env(
     # Compute cache key and artifact dir
     settings = get_settings()
     cache_key = f"am-cache-{project_uid}-{agent_name}-{branch}"
-    artifact_dir = Path(settings.storage.root).expanduser().resolve() / "projects" / slug / "artifacts" / agent_name / branch
+    artifact_dir = Path(settings.storage.root).expanduser().resolve() / "mailboxes" / slug / "artifacts" / agent_name / branch
     # Print as KEY=VALUE lines
     typer.echo(f"SLUG={slug}")
     typer.echo(f"PROJECT_UID={project_uid}")
@@ -4070,7 +4070,7 @@ def am_run(
             await asyncio.to_thread(_write_local_release, path)
 
     lease_path: Optional[Path] = None
-    artifact_dir = Path(settings.storage.root).expanduser().resolve() / "projects" / slug / "artifacts" / agent_name / branch
+    artifact_dir = Path(settings.storage.root).expanduser().resolve() / "mailboxes" / slug / "artifacts" / agent_name / branch
     env = os.environ.copy()
     env.update({
         "AM_SLOT": slot,

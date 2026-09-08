@@ -48,3 +48,83 @@
 - A worker crash is recoverable; incomplete file cleanup is recorded and retried rather than reported as success.
 - Background UI refresh and MCP empty inbox polling do not keep temporary projects alive indefinitely.
 - Tests remain bounded locally; complete integration/slow coverage belongs in CI. Schema-only success is not end-to-end feature completion.
+
+## Upgrade and acceptance guide
+
+The working implementation now connects the schema, browser UI, real-activity renewal,
+database activity history, and HTTP-service maintenance worker. It is no longer a schema-only change.
+
+### Storage ownership and retained legacy data
+
+- SQLite owns projects, agents, messages, recipient read/ack timestamps, attachment metadata,
+  and mailbox events. Sending a message commits its activity event in the same transaction.
+- Newly managed attachments, reservation projections, and build artifacts use
+  `STORAGE_ROOT/mailboxes/<slug>/`. Reservation files are derived guard inputs, not a second database.
+  Startup rebuilds active reservation projections from existing database rows.
+- `STORAGE_ROOT/projects/` and the shared `.git` directory are **not** deleted by mailbox cleanup.
+  They remain legacy archives with a separate, explicitly authorized retirement policy.
+  Existing attachments referenced there remain available to database-based exports.
+- Normal MCP sends, inbox reads, agent identity lookup, HTTP message display, and overseer sends
+  do not open or initialize Git. `/mail/activity` reads database messages and events, including
+  messages predating the event table. Legacy archive pages carry a notice linking to this view.
+- `whois` now accepts `include_recent_activity` and `activity_limit`, returning `recent_activity`.
+  Inbox-resource provenance is `activity`, not a fabricated Git commit. Update clients that
+  explicitly requested the old commit-specific arguments.
+
+### Upgrade
+
+1. Stop the old server before upgrading. Take a consistent SQLite backup and retain the
+   attachment directories; never copy a live database file without accounting for its WAL.
+   Existing share/export tooling remains available; Git bundles alone do not back up new messages.
+2. Restart the HTTP service normally. Schema additions are additive; existing projects stay permanent.
+   Do not edit or replace `.env` for this migration.
+3. If file-reservation hooks are installed, reinstall them after the upgraded server starts:
+   `uv run mcp-agent-mail guard install <project_key> <code_repo_path> --prepush`.
+   Existing generated hooks point at the old reservation directory; reinstalling points them at
+   the database-derived inputs. This does not change the source repository's identity scheme.
+4. Open `/mail/mailboxes?lang=zh-CN` or `/mail/mailboxes?lang=en`.
+
+### Manual acceptance
+
+1. Confirm existing projects appear under permanent mailboxes.
+2. Convert a disposable test mailbox to temporary. Check the displayed inactivity deadline;
+   change its retention to any integer from 1 through 3650 days.
+3. Open its project/message page, or explicitly select a message in the unified split view.
+   Refresh the classification page and check that activity/deadline advanced. Automatic refresh,
+   automatic initial message selection, health checks, and MCP inbox polling must not advance it.
+4. Move the disposable temporary mailbox to the recycle bin. Ordinary project access is blocked;
+   restore it and verify that messages remain available and its activity baseline restarts.
+5. Move it to the recycle bin again and convert it to permanent. It must return to active state
+   with no automatic expiration deadline.
+6. Open its database activity view. Message history and mailbox changes must appear without
+   requiring a Git repository. Do not wait 37 days locally: deadline boundaries and reclamation
+   are verified with fixed-time, isolated tests instead of modifying real mailbox timestamps.
+
+### Cleanup behavior and safety holds
+
+- While the HTTP service runs, maintenance checks once per minute. A due temporary mailbox
+  enters the recycle bin; its seven-day grace period starts when that transition actually occurs.
+- The final reference check and `purging` claim are serialized against SQLite writes. A restore
+  that wins before the claim prevents cleanup. Once destructive work has started, restore and
+  conversion are blocked. Failed cleanup remains retryable, with a visible warning and server log.
+- Only the claimed mailbox's managed directory and database relationships are reclaimed.
+  `human_key` is never used as a deletion path. Traversal, symlinks, and junctions are rejected.
+- Read-only legacy reconciliation checks stable message IDs, bodies, subjects, recipient lists,
+  importance, acknowledgement requirements, thread IDs, and attachment metadata when present.
+  It never silently imports or overwrites divergent records. Archive-only or inconsistent data
+  pauses cleanup **before** the destructive claim, so the mailbox can still be restored.
+- References retained by another mailbox also pause cleanup: this includes messages authored by
+  the temporary project's agents and shared attachment paths. These cases deliberately require
+  operator resolution rather than deleting another mailbox's history. They are not reported as
+  successful purges.
+- Backups and legacy archives have separate retention rules. This feature is not a secure-erasure
+  promise for historical Git objects, SQLite free pages, filesystem snapshots, or external backups.
+
+### Bounded verification
+
+`tests/test_mailbox_lifecycle.py` covers deadlines, restore/conversion, polling vs human access,
+Git-independent messaging, preserved legacy copies, failed/retried cleanup, cross-mailbox references,
+concurrent purge claims, restore during preflight, write fences, path traversal, and execution of the
+rendered Chinese/English controls in Node.js. Related migration, HTTP localization, attachment,
+share/export, guard, and activity-touch regressions are tested separately. Full slow/performance
+coverage remains a CI responsibility; these checks are not a claim of a complete green CI run.

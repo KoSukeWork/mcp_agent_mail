@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 from .config import Settings
-from .storage import ProjectArchive, ensure_archive
+from .storage import MailboxStorage, ensure_mailbox_storage
 
 __all__ = [
     "install_guard",
@@ -269,7 +269,7 @@ def _resolve_hooks_dir(repo: Path) -> Path:
 
 
 
-def render_precommit_script(archive: ProjectArchive) -> str:
+def render_precommit_script(archive: MailboxStorage) -> str:
     """Return the pre-commit script content for the given archive.
 
     Construct with explicit lines at column 0 to avoid indentation errors.
@@ -477,7 +477,7 @@ def render_precommit_script(archive: ProjectArchive) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_prepush_script(archive: ProjectArchive) -> str:
+def render_prepush_script(archive: MailboxStorage) -> str:
     """Return the pre-push script content that checks conflicts across pushed commits.
 
     Python script to avoid external shell assumptions; NUL-safe and respects gate/advisory mode.
@@ -717,7 +717,7 @@ def render_prepush_script(archive: ProjectArchive) -> str:
 async def install_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-commit chain-runner and Agent Mail guard plugin."""
 
-    archive = await ensure_archive(settings, project_slug)
+    archive = await ensure_mailbox_storage(settings, project_slug)
 
     hooks_dir = _resolve_hooks_dir(repo_path)
     if not hooks_dir.exists():
@@ -774,7 +774,7 @@ async def install_guard(settings: Settings, project_slug: str, repo_path: Path) 
 
 async def install_prepush_guard(settings: Settings, project_slug: str, repo_path: Path) -> Path:
     """Install the pre-push chain-runner and Agent Mail guard plugin."""
-    archive = await ensure_archive(settings, project_slug)
+    archive = await ensure_mailbox_storage(settings, project_slug)
 
     hooks_dir = _resolve_hooks_dir(repo_path)
     await asyncio.to_thread(hooks_dir.mkdir, parents=True, exist_ok=True)

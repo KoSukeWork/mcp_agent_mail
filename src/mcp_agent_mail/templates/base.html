@@ -2220,6 +2220,7 @@
 
           <!-- Right side actions -->
           <div class="app-header-actions">
+            <a href="/mail/mailboxes" class="text-sm font-medium px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">{{ _('Mailboxes') }}</a>
             {% block header_actions %}{% endblock %}
 
             <!-- Help Button -->
@@ -2261,8 +2262,14 @@
     </nav>
 
     <!-- Main Content -->
-    <main id="main-content" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 page-enter">
-      {% block content %}{% endblock %}
+      <main id="main-content" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 page-enter">
+        {% if legacy_archive_notice | default(false) %}
+        <aside class="mb-6 rounded-lg border border-amber-400 bg-amber-50 text-amber-950 p-4">
+          {{ _('This is a legacy Git archive. New messages are stored in the database and do not appear here.') }}
+          <a href="/mail/activity" class="underline">{{ _('Database activity') }}</a>
+        </aside>
+        {% endif %}
+        {% block content %}{% endblock %}
     </main>
 
     <!-- Footer -->

@@ -6,7 +6,9 @@
 
 A mail-like coordination layer for coding agents, exposed as an HTTP-only FastMCP server. It gives agents memorable identities, an inbox/outbox, searchable message history, and voluntary file reservation "leases" to avoid stepping on each other.
 
-Think of it as asynchronous email + directory + change-intent signaling for your agents, backed by Git (for human-auditable artifacts) and SQLite (for indexing and queries).
+Think of it as asynchronous email + directory + change-intent signaling for your agents, with SQLite as the authoritative mailbox store. Normal messaging no longer writes or requires a Git archive.
+
+**Mailbox lifecycle:** `/mail/mailboxes` groups permanent mailboxes, temporary mailboxes (30-day inactivity by default), and a 7-day recycle bin. Existing projects remain permanent. New managed files live under `STORAGE_ROOT/mailboxes/`; legacy `projects/` archives and Git history are retained separately. Older Git-centric sections below describe the legacy archive tooling, not the current message persistence path. See the [upgrade and acceptance guide](docs/planning/MAILBOX_LIFECYCLE_PLAN.md#upgrade-and-acceptance-guide) before upgrading, particularly if file-reservation guards are installed.
 
 Status: Under active development. The design is captured in detail in `docs/planning/project_idea_and_guide.md` (start with the original prompt at the top of that file).
 

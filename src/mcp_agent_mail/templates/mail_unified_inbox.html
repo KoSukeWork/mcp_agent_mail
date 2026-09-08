@@ -1123,11 +1123,11 @@ function unifiedInboxManager() {
         window.location.href = `/mail/${msg.project_slug}/message/${msg.id}`;
       } else {
         // Select and display in split view
-        this.selectMessage(msg);
+        this.selectMessage(msg, true);
       }
     },
 
-    selectMessage(msg) {
+    selectMessage(msg, manual = false) {
       // Handle null/undefined gracefully
       if (!msg) {
         this.selectedMessage = null;
@@ -1135,6 +1135,11 @@ function unifiedInboxManager() {
       }
 
       this.selectedMessage = msg;
+      if (manual) {
+        fetch(`/mail/api/mailboxes/by-slug/${encodeURIComponent(msg.project_slug)}/activity`, {method: 'POST'})
+          .then(response => { if (!response.ok) throw new Error('Mailbox activity update failed'); })
+          .catch(error => console.warn('Mailbox activity update failed', error));
+      }
 
       // Scroll message into view in left pane (for keyboard navigation)
       this.$nextTick(() => {
@@ -1242,7 +1247,7 @@ function unifiedInboxManager() {
       if (!this.selectedMessage || this.filteredMessages.length === 0) return;
       const currentIndex = this.filteredMessages.findIndex(m => m.id === this.selectedMessage.id);
       if (currentIndex < this.filteredMessages.length - 1) {
-        this.selectMessage(this.filteredMessages[currentIndex + 1]);
+        this.selectMessage(this.filteredMessages[currentIndex + 1], true);
       }
     },
 
@@ -1250,7 +1255,7 @@ function unifiedInboxManager() {
       if (!this.selectedMessage || this.filteredMessages.length === 0) return;
       const currentIndex = this.filteredMessages.findIndex(m => m.id === this.selectedMessage.id);
       if (currentIndex > 0) {
-        this.selectMessage(this.filteredMessages[currentIndex - 1]);
+        this.selectMessage(this.filteredMessages[currentIndex - 1], true);
       }
     },
 

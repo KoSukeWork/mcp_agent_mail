@@ -41,6 +41,18 @@ class Project(SQLModel, table=True):
     mailbox_state: str = Field(default="active", max_length=16, sa_column_kwargs={"server_default": "active"})
     trashed_at: Optional[datetime] = Field(default=None)
     purge_after: Optional[datetime] = Field(default=None)
+    cleanup_error: Optional[str] = Field(default=None)
+
+class MailboxEvent(SQLModel, table=True):
+    """Database-owned mailbox activity; no Git commit is needed to retain it."""
+
+    __tablename__ = "mailbox_events"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="projects.id", index=True)
+    event_type: str = Field(max_length=64)
+    detail: str = Field(default="")
+    created_at: datetime = Field(default_factory=_utcnow_naive, index=True)
+
 
 class Product(SQLModel, table=True):
     """Logical grouping across multiple repositories for product-wide inbox/search and threads."""

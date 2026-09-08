@@ -43,7 +43,7 @@ async def test_attachments_keep_originals_and_manifest(isolated_env, monkeypatch
         )
         assert res.data.get("deliveries")
         # Check originals and manifest presence
-        proj = storage_root / "projects" / "backend"
+        proj = storage_root / "mailboxes" / "backend"
         manifests = list((proj / "attachments" / "_manifests").glob("*.json"))
         assert manifests, "expected manifest json"
         originals = list((proj / "attachments" / "originals").rglob("*.*"))

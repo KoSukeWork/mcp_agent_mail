@@ -381,13 +381,11 @@ def get_commit_queue_stats() -> dict[str, Any]:
 
 
 @dataclass(slots=True)
-class ProjectArchive:
+class MailboxStorage:
     settings: Settings
     slug: str
     # Project-specific root inside the single global archive repo
     root: Path
-    # The single Git repo object rooted at settings.storage.root
-    repo: Repo
     # Path used for advisory file lock during archive writes
     lock_path: Path
     # Filesystem path to the Git repo working directory (archive root)
@@ -396,6 +394,13 @@ class ProjectArchive:
     @property
     def attachments_dir(self) -> Path:
         return self.root / "attachments"
+
+
+@dataclass(slots=True)
+class ProjectArchive(MailboxStorage):
+    """Legacy Git archive, opened only by explicit archive operations."""
+
+    repo: Repo
 
 _PROCESS_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 _PROCESS_LOCK_OWNERS: dict[tuple[int, str], int] = {}
@@ -1241,7 +1246,7 @@ class AsyncFileLock:
 
 
 @asynccontextmanager
-async def archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 60.0) -> AsyncIterator[None]:
+async def archive_write_lock(archive: MailboxStorage, *, timeout_seconds: float = 60.0) -> AsyncIterator[None]:
     """Context manager for safely mutating archive surfaces.
 
     The lock is released in a ``finally`` no matter how the body terminates —
@@ -1433,6 +1438,22 @@ async def ensure_archive_root(settings: Settings) -> tuple[Path, Repo]:
     return repo_root, repo
 
 
+async def ensure_mailbox_storage(settings: Settings, slug: str) -> MailboxStorage:
+    """Open attachment/projection storage without initializing or opening Git."""
+    if not slug or Path(slug).name != slug or slug in {".", ".."} or "/" in slug or "\\" in slug:
+        raise ValueError("Invalid mailbox storage slug")
+    root = Path(settings.storage.root).expanduser().resolve()
+    project_root = root / "mailboxes" / slug
+    guarded = (root / "mailboxes", project_root, root / ".mailbox-locks", root / ".mailbox-locks" / f"{slug}.lock")
+    if any(path.is_symlink() or path.is_junction() for path in guarded) or not project_root.resolve().is_relative_to(root / "mailboxes"):
+        raise ValueError("Mailbox storage must remain inside the configured storage root")
+    await asyncio.to_thread(project_root.mkdir, parents=True, exist_ok=True)
+    lock_root = root / ".mailbox-locks"
+    await asyncio.to_thread(lock_root.mkdir, parents=True, exist_ok=True)
+    return MailboxStorage(settings=settings, slug=slug, root=project_root,
+                          lock_path=lock_root / f"{slug}.lock", repo_root=root)
+
+
 async def ensure_archive(settings: Settings, slug: str) -> ProjectArchive:
     repo_root, repo = await ensure_archive_root(settings)
     project_root = repo_root / "projects" / slug
@@ -1506,11 +1527,12 @@ async def _ensure_repo(root: Path, settings: Settings) -> Repo:
         return repo
 
 
-async def write_agent_profile(archive: ProjectArchive, agent: Mapping[str, object]) -> None:
+async def write_agent_profile(archive: MailboxStorage, agent: Mapping[str, object]) -> None:
     profile_path = archive.root / "agents" / str(agent["name"]) / "profile.json"
     await _write_json(profile_path, dict(agent))
     rel = profile_path.relative_to(archive.repo_root).as_posix()
-    await _commit(archive.repo, archive.settings, f"agent: profile {agent['name']}", [rel])
+    if isinstance(archive, ProjectArchive):
+        await _commit(archive.repo, archive.settings, f"agent: profile {agent['name']}", [rel])
 
 
 def _build_file_reservation_commit_message(entries: Sequence[tuple[str, str]]) -> str:
@@ -1523,7 +1545,7 @@ def _build_file_reservation_commit_message(entries: Sequence[tuple[str, str]]) -
 
 
 async def write_file_reservation_records(
-    archive: ProjectArchive,
+    archive: MailboxStorage,
     file_reservations: Sequence[dict[str, object]],
 ) -> None:
     if not file_reservations:
@@ -1553,10 +1575,11 @@ async def write_file_reservation_records(
         agent_name = str(normalized_file_reservation.get("agent", "unknown"))
         entries.append((agent_name, path_pattern))
     commit_message = _build_file_reservation_commit_message(entries)
-    await _commit(archive.repo, archive.settings, commit_message, rel_paths)
+    if isinstance(archive, ProjectArchive):
+        await _commit(archive.repo, archive.settings, commit_message, rel_paths)
 
 
-async def write_file_reservation_record(archive: ProjectArchive, file_reservation: dict[str, object]) -> None:
+async def write_file_reservation_record(archive: MailboxStorage, file_reservation: dict[str, object]) -> None:
     await write_file_reservation_records(archive, [file_reservation])
 
 
@@ -1757,7 +1780,7 @@ async def _update_thread_digest(
     return digest_path.relative_to(archive.repo_root).as_posix()
 
 
-def _resolve_archive_relative_path(archive: ProjectArchive, raw_path: str) -> Path:
+def _resolve_archive_relative_path(archive: MailboxStorage, raw_path: str) -> Path:
     """Resolve a relative path safely inside the project archive root.
 
     Rejects directory traversal and ensures the resolved path stays within
@@ -1785,7 +1808,7 @@ def _resolve_archive_relative_path(archive: ProjectArchive, raw_path: str) -> Pa
 
 
 async def process_attachments(
-    archive: ProjectArchive,
+    archive: MailboxStorage,
     body_md: str,
     attachment_paths: Iterable[str] | None,
     convert_markdown: bool,
@@ -1836,7 +1859,7 @@ async def process_attachments(
 
 
 async def _convert_markdown_images(
-    archive: ProjectArchive,
+    archive: MailboxStorage,
     body_md: str,
     meta: list[dict[str, object]],
     commit_paths: list[str],
@@ -1908,7 +1931,7 @@ async def _convert_markdown_images(
     return "".join(result_parts)
 
 
-async def _store_image(archive: ProjectArchive, path: Path, *, embed_policy: str = "auto") -> tuple[dict[str, object], str | None]:
+async def _store_image(archive: MailboxStorage, path: Path, *, embed_policy: str = "auto") -> tuple[dict[str, object], str | None]:
     data = await _to_thread(path.read_bytes)
 
     # Open image and convert, properly closing the original to prevent file handle leaks
@@ -2028,7 +2051,7 @@ async def _write_json(path: Path, payload: dict[str, object]) -> None:
     await _write_text(path, content + "\n")
 
 
-async def _append_attachment_audit(archive: ProjectArchive, digest: str, event: dict[str, object]) -> None:
+async def _append_attachment_audit(archive: MailboxStorage, digest: str, event: dict[str, object]) -> None:
     """Append a single JSON line audit record for an attachment digest.
 
     Creates attachments/_audit/<digest>.log if missing. Best-effort; failures are ignored.

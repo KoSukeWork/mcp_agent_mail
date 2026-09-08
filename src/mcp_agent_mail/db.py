@@ -760,6 +760,7 @@ async def ensure_schema(settings: Settings | None = None) -> None:
             await conn.run_sync(_migrate_sqlite_project_lifecycle)
             # Setup FTS and custom indexes
             await conn.run_sync(_setup_fts)
+            await conn.run_sync(_setup_mailbox_lifecycle)
         _schema_ready = True
 
 
@@ -779,6 +780,7 @@ def _migrate_sqlite_project_lifecycle(connection: Connection) -> None:
         "mailbox_state": "VARCHAR(16) NOT NULL DEFAULT 'active' CHECK (mailbox_state IN ('active', 'trash', 'purging'))",
         "trashed_at": "DATETIME DEFAULT NULL",
         "purge_after": "DATETIME DEFAULT NULL",
+        "cleanup_error": "TEXT DEFAULT NULL",
     }
     for name, definition in definitions.items():
         if name not in columns:
@@ -790,6 +792,47 @@ def _migrate_sqlite_project_lifecycle(connection: Connection) -> None:
     connection.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS idx_projects_mailbox_purge "
         "ON projects (mailbox_type, mailbox_state, purge_after)"
+    )
+
+
+def _setup_mailbox_lifecycle(connection: Connection) -> None:
+    """Fence in-flight inserts and keep real message activity in the same transaction."""
+    if connection.dialect.name != "sqlite":
+        return
+    for table in ("agents", "messages", "file_reservations", "window_identities", "message_summaries"):
+        connection.exec_driver_sql(
+            f"CREATE TRIGGER IF NOT EXISTS mailbox_active_{table} BEFORE INSERT ON {table} "
+            "WHEN COALESCE((SELECT mailbox_state FROM projects WHERE id = NEW.project_id), '') != 'active' "
+            "BEGIN SELECT RAISE(ABORT, 'Mailbox is unavailable'); END"
+        )
+    connection.exec_driver_sql(
+        "CREATE TRIGGER IF NOT EXISTS mailbox_sender_fence BEFORE INSERT ON messages "
+        "WHEN COALESCE((SELECT p.mailbox_state FROM projects p JOIN agents a ON a.project_id = p.id "
+        "WHERE a.id = NEW.sender_id), '') != 'active' "
+        "BEGIN SELECT RAISE(ABORT, 'Sender mailbox is unavailable'); END"
+    )
+    connection.exec_driver_sql(
+        "CREATE TRIGGER IF NOT EXISTS mailbox_message_activity AFTER INSERT ON messages BEGIN "
+        "UPDATE projects SET last_activity_at = strftime('%Y-%m-%d %H:%M:%f', 'now') "
+        "WHERE id IN (NEW.project_id, (SELECT project_id FROM agents WHERE id = NEW.sender_id)) "
+        "AND mailbox_type = 'temporary' AND mailbox_state = 'active' "
+        "AND (last_activity_at IS NULL OR last_activity_at < strftime('%Y-%m-%d %H:%M:%f', 'now')); "
+        "INSERT INTO mailbox_events (project_id, event_type, detail, created_at) "
+        "VALUES (NEW.project_id, 'message', CAST(NEW.id AS TEXT), strftime('%Y-%m-%d %H:%M:%f', 'now')); END"
+    )
+    connection.exec_driver_sql(
+        "CREATE TRIGGER IF NOT EXISTS mailbox_receipt_fence BEFORE UPDATE OF read_ts, ack_ts ON message_recipients "
+        "WHEN COALESCE((SELECT p.mailbox_state FROM projects p JOIN messages m ON m.project_id = p.id "
+        "WHERE m.id = NEW.message_id), '') != 'active' "
+        "BEGIN SELECT RAISE(ABORT, 'Mailbox is unavailable'); END"
+    )
+    connection.exec_driver_sql(
+        "CREATE TRIGGER IF NOT EXISTS mailbox_receipt_activity AFTER UPDATE OF read_ts, ack_ts ON message_recipients "
+        "WHEN (OLD.read_ts IS NULL AND NEW.read_ts IS NOT NULL) OR (OLD.ack_ts IS NULL AND NEW.ack_ts IS NOT NULL) "
+        "BEGIN UPDATE projects SET last_activity_at = strftime('%Y-%m-%d %H:%M:%f', 'now') "
+        "WHERE id = (SELECT project_id FROM messages WHERE id = NEW.message_id) "
+        "AND mailbox_type = 'temporary' AND mailbox_state = 'active' "
+        "AND (last_activity_at IS NULL OR last_activity_at < strftime('%Y-%m-%d %H:%M:%f', 'now')); END"
     )
 
 

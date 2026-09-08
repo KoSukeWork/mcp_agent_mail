@@ -77,11 +77,10 @@ from .storage import (
     collect_lock_status,
     emit_notification_signal,
     ensure_archive,
-    heal_archive_locks,
+    ensure_mailbox_storage,
+    MailboxStorage,
     process_attachments,
-    write_agent_profile,
     write_file_reservation_records,
-    write_message_bundle,
 )
 from .utils import (
     generate_agent_name,
@@ -779,17 +778,8 @@ def _lifespan_factory(settings: Settings) -> Callable[[FastMCP], AsyncContextMan
     @asynccontextmanager
     async def lifespan(app: FastMCP) -> AsyncIterator[None]:
         init_engine(settings)
-        heal_summary = await heal_archive_locks(settings)
-        if heal_summary.get("locks_removed") or heal_summary.get("metadata_removed"):
-            logger.info(
-                "archive.healed_on_startup",
-                extra={
-                    "locks_scanned": heal_summary.get("locks_scanned", 0),
-                    "locks_removed": len(heal_summary.get("locks_removed", [])),
-                    "metadata_removed": len(heal_summary.get("metadata_removed", [])),
-                },
-            )
         await ensure_schema(settings)
+        await _rebuild_reservation_projections(settings)
         try:
             yield
         finally:
@@ -1811,6 +1801,8 @@ def _rich_error_panel(title: str, payload: dict[str, Any]) -> None:
 
 
 def _project_to_dict(project: Project) -> dict[str, Any]:
+    from .lifecycle import mailbox_dict
+
     d: dict[str, Any] = {
         "id": project.id,
         "slug": project.slug,
@@ -1819,6 +1811,7 @@ def _project_to_dict(project: Project) -> dict[str, Any]:
     }
     if getattr(project, "archived_at", None) is not None:
         d["archived_at"] = _iso(project.archived_at)
+    d.update(mailbox_dict(project))
     return d
 
 
@@ -2584,6 +2577,8 @@ async def _get_project_by_identifier(identifier: str) -> Project:
         )
         project = result.scalars().first()
         if project:
+            if project.mailbox_state != "active":
+                raise ToolExecutionError("MAILBOX_UNAVAILABLE", "Restore the mailbox from the recycle bin before use")
             return project
 
     # Project not found - provide helpful suggestions
@@ -2812,9 +2807,16 @@ def _canonical_project_pair(a_id: int, b_id: int) -> tuple[int, int]:
 
 
 @asynccontextmanager
-async def _archive_write_lock(archive: ProjectArchive, *, timeout_seconds: float = 60.0) -> AsyncIterator[None]:
+async def _archive_write_lock(archive: MailboxStorage, *, timeout_seconds: float = 60.0) -> AsyncIterator[None]:
     try:
         async with archive_write_lock(archive, timeout_seconds=timeout_seconds):
+            if not isinstance(archive, ProjectArchive):
+                async with get_session() as session:
+                    active = await session.scalar(select(Project.id).where(
+                        Project.slug == archive.slug, Project.mailbox_state == "active",
+                    ))
+                    if active is None:
+                        raise ToolExecutionError("MAILBOX_UNAVAILABLE", "Restore the mailbox before writing to it")
             yield
     except TimeoutError as exc:
         raise ToolExecutionError(
@@ -3277,7 +3279,7 @@ async def _generate_unique_agent_name(
     settings: Settings,
     name_hint: Optional[str] = None,
 ) -> str:
-    archive = await ensure_archive(settings, project.slug)
+    archive = await ensure_mailbox_storage(settings, project.slug)
 
     async def available(candidate: str) -> bool:
         if await _agent_name_exists(project, candidate):
@@ -3434,7 +3436,6 @@ async def _get_or_create_agent(
         # Priority 4: no name, no window ID -> auto-generate
         desired_name = await _generate_unique_agent_name(project, settings, None)
     await ensure_schema()
-    newly_created = False
     async with get_session() as session:
         for _attempt in range(5):
             # Use case-insensitive matching to be consistent with _agent_name_exists() and _get_agent()
@@ -3467,7 +3468,6 @@ async def _get_or_create_agent(
                 await session.commit()
                 await session.refresh(candidate)
                 agent = candidate
-                newly_created = True
                 break
             except IntegrityError:
                 await session.rollback()
@@ -3500,7 +3500,7 @@ async def _get_or_create_agent(
         else:
             raise RuntimeError("Failed to create a unique agent after multiple retries.")
     # Post-creation: associate explicit-name agents with window identity and
-    # enrich the archive profile.  We consolidate into a single block to avoid
+    # keep the database window binding current. We consolidate this to avoid
     # redundant DB lookups (window_identity may already be set from the
     # priority-chain resolution above).
     if window_uuid and _validate_window_uuid(window_uuid) and window_identity is None and explicit_name_used:
@@ -3513,27 +3513,7 @@ async def _get_or_create_agent(
         else:
             await _touch_window_identity(window_identity, ttl_days)
 
-    archive = await ensure_archive(settings, project.slug)
-    agent_dict = _agent_to_dict(agent)
-    if window_identity is not None:
-        agent_dict["window_id"] = window_identity.window_uuid
-        agent_dict["window_display_name"] = window_identity.display_name
-    try:
-        async with _archive_write_lock(archive):
-            await write_agent_profile(archive, agent_dict)
-    except Exception:
-        # Roll back the DB record if the archive write fails and we just
-        # created the agent.  This keeps the two stores consistent so the
-        # caller doesn't receive an error while the agent already exists in
-        # the DB (issue #121).
-        if newly_created:
-            with suppress(Exception):
-                async with get_session() as rollback_session:
-                    db_agent = await rollback_session.get(Agent, agent.id)
-                    if db_agent:
-                        await rollback_session.delete(db_agent)
-                        await rollback_session.commit()
-        raise
+    # Agent identities are database-owned; no file projection can invalidate this commit.
     return agent
 
 
@@ -3951,7 +3931,7 @@ async def _write_file_reservation_records(
     # the reservation outlived its owning Agent row. (#161)
     records: Sequence[tuple[FileReservation, Optional[Agent]]],
     *,
-    archive: ProjectArchive | None = None,
+    archive: MailboxStorage | None = None,
     archive_locked: bool = False,
     reason_override: Optional[str] = None,
 ) -> None:
@@ -3960,7 +3940,7 @@ async def _write_file_reservation_records(
     if archive_locked and archive is None:
         raise ValueError("archive_locked=True requires a provided archive")
     settings = get_settings()
-    target_archive = archive or await ensure_archive(settings, project.slug)
+    target_archive = archive or await ensure_mailbox_storage(settings, project.slug)
 
     async def _write_all() -> None:
         payloads = [
@@ -3980,6 +3960,25 @@ async def _write_file_reservation_records(
 
     async with _archive_write_lock(target_archive):
         await _write_all()
+
+
+async def _rebuild_reservation_projections(settings: Settings) -> None:
+    """Rebuild guard inputs from authoritative rows, including pre-upgrade leases."""
+    async with get_session() as session:
+        rows = (await session.execute(select(Project, FileReservation, Agent).select_from(FileReservation).join(
+            Project, cast(Any, Project.id) == FileReservation.project_id,
+        ).outerjoin(Agent, cast(Any, Agent.id) == FileReservation.agent_id).where(
+            cast(Any, Project.mailbox_state) == "active",
+            cast(Any, FileReservation.released_ts).is_(None),
+            cast(Any, FileReservation.expires_ts) > datetime.now(timezone.utc),
+        ))).all()
+    grouped: dict[int, tuple[Project, list[tuple[FileReservation, Optional[Agent]]]]] = {}
+    for project, reservation, agent in rows:
+        if project.id is not None:
+            grouped.setdefault(project.id, (project, []))[1].append((reservation, agent))
+    for project, records in grouped.values():
+        await _write_file_reservation_records(project, records,
+                                              archive=await ensure_mailbox_storage(settings, project.slug))
 
 
 async def _collect_file_reservation_statuses(
@@ -4239,7 +4238,7 @@ async def sweep_stale_agents(
 async def _expire_stale_file_reservations(
     project_id: int,
     *,
-    archive: ProjectArchive | None = None,
+    archive: MailboxStorage | None = None,
     archive_locked: bool = False,
 ) -> list[FileReservationStatus]:
     await ensure_schema()
@@ -5513,10 +5512,10 @@ def build_mcp_server() -> FastMCP:
         recipient_records.extend((agent, "cc") for agent in cc_agents)
         recipient_records.extend((agent, "bcc") for agent in bcc_agents)
 
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_mailbox_storage(settings, project.slug)
         sender_project = project if sender.project_id == project.id else await _get_project_by_id(sender.project_id)
         sender_is_local = sender_project.id == project.id
-        sender_archive_label = _sender_display_name(
+        _sender_display_name(
             message_project_id=project.id,
             sender_name=sender.name,
             sender_project_id=sender_project.id,
@@ -5628,7 +5627,7 @@ def build_mcp_server() -> FastMCP:
                         }
                     }
 
-            processed_body, attachments_meta, attachment_files = await process_attachments(
+            processed_body, attachments_meta, _attachment_files = await process_attachments(
                 archive,
                 body_md,
                 attachment_paths or [],
@@ -5651,7 +5650,7 @@ def build_mcp_server() -> FastMCP:
                 topic=topic,
                 reply_to=reply_to,
             )
-            frontmatter = _message_frontmatter(
+            _message_frontmatter(
                 message,
                 project,
                 sender,
@@ -5683,38 +5682,8 @@ def build_mcp_server() -> FastMCP:
             if window_identity is not None:
                 payload["window_id"] = window_identity.window_uuid
                 payload["window_display_name"] = window_identity.display_name
-            try:
-                await write_message_bundle(
-                    archive,
-                    frontmatter,
-                    processed_body,
-                    sender_archive_label,
-                    recipients_for_archive,
-                    attachment_files,
-                    sender_outbox_name=sender.name if sender_is_local else None,
-                )
-            except Exception:
-                # #180: _create_message already committed the message + recipient
-                # rows. If the archive write fails, roll them back so we never
-                # leave a committed DB row with no archive artifact (mirrors the
-                # #173 agent-registration compensation). Best-effort cleanup; the
-                # original archive error is always re-raised.
-                with suppress(Exception):
-                    async with get_session() as rollback_session:
-                        orphan_recipients = (
-                            await rollback_session.execute(
-                                select(MessageRecipient).where(
-                                    MessageRecipient.message_id == message.id
-                                )
-                            )
-                        ).scalars().all()
-                        for orphan_recipient in orphan_recipients:
-                            await rollback_session.delete(orphan_recipient)
-                        orphan_message = await rollback_session.get(Message, message.id)
-                        if orphan_message is not None:
-                            await rollback_session.delete(orphan_message)
-                        await rollback_session.commit()
-                raise
+            # The committed database transaction is the message authority. No
+            # message mirror or Git commit is required for successful delivery.
 
             # Collect notification signals for post-lock emission.
             if settings.notifications.enabled:
@@ -5985,7 +5954,9 @@ def build_mcp_server() -> FastMCP:
 
         await _ctx_info_safe(ctx, f"Ensuring project for key '{human_key}'.")
         project = await _ensure_project(human_key)
-        await ensure_archive(settings, project.slug)
+        if project.mailbox_state != "active":
+            raise ToolExecutionError("MAILBOX_UNAVAILABLE", "Restore the mailbox from the recycle bin before use")
+        await ensure_mailbox_storage(settings, project.slug)
         payload = _project_to_dict(project)
         # Worktree identity metadata is opt-in to keep default calls lightweight and stable.
         if settings.worktrees_enabled:
@@ -6529,7 +6500,7 @@ def build_mcp_server() -> FastMCP:
         fs_errors: list[str] = []
         try:
             settings = get_settings()
-            archive = await ensure_archive(settings, project.slug)
+            archive = await ensure_mailbox_storage(settings, project.slug)
             agent_dir = archive.root / "agents" / agent_name
             files_removed, dirs_removed = await asyncio.to_thread(_delete_tree_with_counts, agent_dir)
         except Exception as exc:
@@ -6762,12 +6733,12 @@ def build_mcp_server() -> FastMCP:
         project_key: str,
         agent_name: str,
         registration_token: Optional[str] = None,
-        include_recent_commits: bool = True,
-        commit_limit: int = 5,
+        include_recent_activity: bool = True,
+        activity_limit: int = 5,
         format: Optional[str] = None,
     ) -> dict[str, Any]:
         """
-        Return enriched profile details for an agent, optionally including recent archive commits.
+        Return enriched profile details for an agent, optionally including recent database activity.
 
         Discovery
         ---------
@@ -6780,10 +6751,10 @@ def build_mcp_server() -> FastMCP:
             Project slug or human key.
         agent_name : str
             Agent name to look up (use resource://agents/{project_key} to discover names).
-        include_recent_commits : bool
-            If true, include latest commits touching the project archive authored by the configured git author.
-        commit_limit : int
-            Maximum number of recent commits to include.
+        include_recent_activity : bool
+            If true, include the agent's latest sent messages from the database.
+        activity_limit : int
+            Maximum number of recent activity entries to include.
 
         Returns
         -------
@@ -6801,24 +6772,15 @@ def build_mcp_server() -> FastMCP:
         )
         profile = _agent_to_dict(agent)
         recent: list[dict[str, Any]] = []
-        if include_recent_commits:
-            archive = await ensure_archive(settings, project.slug)
-            repo: Repo = archive.repo
-            try:
-                # Limit to archive path; extract last commits
-                count = max(1, min(50, commit_limit))
-                for commit in repo.iter_commits(paths=["."], max_count=count):
-                    recent.append(
-                        {
-                            "hexsha": commit.hexsha[:12],
-                            "summary": commit.summary,
-                            "authored_ts": _iso(datetime.fromtimestamp(commit.authored_date, tz=timezone.utc)),
-                        }
-                    )
-            except Exception:
-                pass
-        profile["recent_commits"] = recent
-        await ctx.info(f"whois for '{agent_name}' in '{project.human_key}' returned {len(recent)} commits")
+        if include_recent_activity:
+            async with get_session() as session:
+                messages = (await session.scalars(select(Message).where(
+                    Message.sender_id == agent.id,
+                ).order_by(cast(Any, Message.created_ts).desc()).limit(max(1, min(50, activity_limit))))).all()
+                recent = [{"message_id": message.id, "subject": message.subject,
+                           "created_ts": _iso(message.created_ts)} for message in messages]
+        profile["recent_activity"] = recent
+        await ctx.info(f"whois for '{agent_name}' in '{project.human_key}' returned {len(recent)} activity entries")
         return profile
 
     @mcp.tool(name="create_agent_identity")
@@ -6918,20 +6880,6 @@ def build_mcp_server() -> FastMCP:
                 await session.refresh(db_agent)
                 agent = db_agent
         agent, token = await _ensure_agent_registration_token(agent)
-        archive = await ensure_archive(settings, project.slug)
-        try:
-            async with _archive_write_lock(archive):
-                await write_agent_profile(archive, _agent_to_dict(agent))
-        except Exception:
-            # Roll back the DB record so the caller doesn't get an error
-            # while the agent already exists in the database (issue #121).
-            with suppress(Exception):
-                async with get_session() as rollback_session:
-                    db_agent = await rollback_session.get(Agent, agent.id)
-                    if db_agent:
-                        await rollback_session.delete(db_agent)
-                        await rollback_session.commit()
-            raise
         _bind_session_agent(ctx, project, agent)
         await ctx.info(f"Created new agent identity '{agent.name}' for project '{project.human_key}'.")
         result = _agent_to_dict(agent)
@@ -11542,7 +11490,7 @@ def build_mcp_server() -> FastMCP:
 
         granted: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
-        archive = await ensure_archive(settings, project.slug)
+        archive = await ensure_mailbox_storage(settings, project.slug)
         ctx_branch: Optional[str] = None
         ctx_worktree: Optional[str] = None
         try:
@@ -12247,7 +12195,7 @@ def build_mcp_server() -> FastMCP:
                 safe = safe.replace(ch, "_")
             return safe or "unknown"
 
-        def _slot_dir(archive: ProjectArchive, slot: str) -> Path:
+        def _slot_dir(archive: MailboxStorage, slot: str) -> Path:
             safe = _safe_component(slot)
             return archive.root / "build_slots" / safe
 
@@ -12328,7 +12276,7 @@ def build_mcp_server() -> FastMCP:
                 token_param="registration_token",
                 action="acquire_build_slot",
             )
-            archive = await ensure_archive(settings, project.slug)
+            archive = await ensure_mailbox_storage(settings, project.slug)
             now = datetime.now(timezone.utc)
             holder_branch = (branch or "").strip() or await asyncio.to_thread(_compute_branch, project.human_key)
             conflicts: list[dict[str, Any]] = []
@@ -12390,7 +12338,7 @@ def build_mcp_server() -> FastMCP:
                 token_param="registration_token",
                 action="renew_build_slot",
             )
-            archive = await ensure_archive(settings, project.slug)
+            archive = await ensure_mailbox_storage(settings, project.slug)
             now = datetime.now(timezone.utc)
             holder_branch = (branch or "").strip() or await asyncio.to_thread(_compute_branch, project.human_key)
             holder_id = _safe_component(f"{agent.name}__{holder_branch or 'unknown'}")
@@ -12431,7 +12379,7 @@ def build_mcp_server() -> FastMCP:
                 token_param="registration_token",
                 action="release_build_slot",
             )
-            archive = await ensure_archive(settings, project.slug)
+            archive = await ensure_mailbox_storage(settings, project.slug)
             now = datetime.now(timezone.utc)
             holder_branch = (branch or "").strip() or await asyncio.to_thread(_compute_branch, project.human_key)
             holder_id = _safe_component(f"{agent.name}__{holder_branch or 'unknown'}")
@@ -14196,9 +14144,7 @@ def build_mcp_server() -> FastMCP:
         for item in messages:
             try:
                 msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    item["commit"] = commit_info
+                item["activity"] = {"message_id": msg_obj.id, "created_ts": _iso(msg_obj.created_ts), "source": "database"}
             except Exception:
                 pass
             enriched.append(item)
@@ -14596,9 +14542,7 @@ def build_mcp_server() -> FastMCP:
             payload = dict(item)
             try:
                 msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    payload["commit"] = commit_info
+                payload["activity"] = {"message_id": msg_obj.id, "created_ts": _iso(msg_obj.created_ts), "source": "database"}
             except Exception:
                 pass
             out.append(payload)
@@ -14656,9 +14600,7 @@ def build_mcp_server() -> FastMCP:
         for item in items:
             try:
                 msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    item["commit"] = commit_info
+                item["activity"] = {"message_id": msg_obj.id, "created_ts": _iso(msg_obj.created_ts), "source": "database"}
             except Exception:
                 pass
             enriched.append(item)
@@ -14722,9 +14664,7 @@ def build_mcp_server() -> FastMCP:
         for item in items:
             try:
                 msg_obj = await _get_message(project_obj, int(item["id"]))
-                commit_info = await _commit_info_for_message(settings, project_obj, msg_obj)
-                if commit_info:
-                    item["commit"] = commit_info
+                item["activity"] = {"message_id": msg_obj.id, "created_ts": _iso(msg_obj.created_ts), "source": "database"}
             except Exception:
                 pass
             enriched.append(item)

@@ -21,10 +21,11 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import NoResultFound
+from sqlmodel import select
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import Receive, Scope, Send
 
@@ -50,6 +51,7 @@ from .localization import (
     select_interface_locale,
     set_interface_locale,
 )
+from .models import Project
 from .storage import (
     ProjectArchive,
     archive_write_lock,
@@ -63,12 +65,10 @@ from .storage import (
     get_file_content,
     get_historical_inbox_snapshot,
     get_lock_telemetry,
-    get_message_commit_sha,
     get_recent_commits,
     get_repo_cache_stats,
     get_timeline_commits,
     proactive_fd_cleanup,
-    write_agent_profile,
     write_file_reservation_record,
 )
 
@@ -102,7 +102,6 @@ async def _ensure_ack_escalation_holder(
     """
     holder_agent_id = int(recipient_agent_id)
     holder_agent_name = recipient_name
-    holder_profile_payload: dict[str, Any] | None = None
 
     async with get_session() as s_holder:
         hid_row = await s_holder.execute(
@@ -138,7 +137,7 @@ async def _ensure_ack_escalation_holder(
             holder_agent_id = hid2
             holder_agent_name = claim_name
             if project_slug:
-                holder_profile_payload = {
+                {
                     "id": holder_agent_id,
                     "name": holder_agent_name,
                     "program": "ops",
@@ -150,11 +149,6 @@ async def _ensure_ack_escalation_holder(
                     "attachments_policy": "auto",
                     "contact_policy": "auto",
                 }
-
-    if holder_profile_payload is not None and project_slug:
-        archive = await ensure_archive(settings, project_slug)
-        async with archive_write_lock(archive):
-            await write_agent_profile(archive, holder_profile_payload)
 
     return holder_agent_id, holder_agent_name
 
@@ -1425,7 +1419,33 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         )
                 await asyncio.sleep(interval)
 
+        async def _worker_mailbox_lifecycle() -> None:
+            from .lifecycle import due_cleanup_ids, expire_mailboxes, purge_mailbox
+
+            log = structlog.get_logger("maintenance.mailboxes")
+            while True:
+                try:
+                    await ensure_schema(settings)
+                    expired = await expire_mailboxes()
+                    if expired:
+                        log.info("mailboxes.expired", count=expired)
+                    for project_id in await due_cleanup_ids():
+                        try:
+                            if await purge_mailbox(settings, project_id):
+                                log.info("mailboxes.cleaned", project_id=project_id)
+                        except Exception as exc:
+                            log.exception("mailboxes.cleanup_failed", project_id=project_id)
+                            async with get_session() as session:
+                                failed = await session.get(Project, project_id)
+                                if failed is not None and failed.mailbox_state in {"trash", "purging"}:
+                                    failed.cleanup_error = str(exc)[:1000]
+                                    await session.commit()
+                except Exception:
+                    log.exception("mailboxes.maintenance_failed")
+                await asyncio.sleep(60)
+
         tasks = []
+        tasks.append(asyncio.create_task(_worker_mailbox_lifecycle()))
         # FD health monitor always runs - it's critical for preventing EMFILE cascades
         tasks.append(asyncio.create_task(_worker_fd_health()))
         if settings.file_reservations_cleanup_enabled:
@@ -1518,6 +1538,29 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             return response
 
     fastapi_app.add_middleware(InterfaceLocaleMiddleware)
+
+    @fastapi_app.middleware("http")
+    async def mailbox_access(request: Request, call_next: Any) -> Response:
+        from .lifecycle import touch_project
+
+        project_id = None
+        parts = request.url.path.strip("/").split("/")
+        reserved = {"api", "projects", "mailboxes", "activity", "unified-inbox", "archive", "static", "assets"}
+        if len(parts) >= 2 and parts[0] == "mail" and parts[1] not in reserved:
+            await ensure_schema(settings)
+            async with get_session() as session:
+                project = await session.scalar(select(Project).where(Project.slug == parts[1]))
+                if project is not None:
+                    project_id = project.id
+                    if project.mailbox_state != "active":
+                        if "text/html" in request.headers.get("accept", ""):
+                            return RedirectResponse("/mail/mailboxes", status_code=303)
+                        return JSONResponse({"detail": "Mailbox is in the recycle bin or being cleaned up"}, status_code=410)
+        response = await call_next(request)
+        if (project_id is not None and request.method == "GET" and response.status_code == 200
+                and request.headers.get("sec-fetch-mode") == "navigate"):
+            await touch_project(project_id)
+        return response
 
     # Simple request logging (configurable)
     if settings.http.request_log_enabled:
@@ -1947,6 +1990,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         async def _render(name: str, **ctx: Any) -> HTMLResponse:
             tpl = env.get_template(name)
+            ctx["legacy_archive_notice"] = name.startswith("archive_")
             html = await tpl.render_async(**ctx)
             return HTMLResponse(html)
 
@@ -2065,6 +2109,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         JOIN agents sender ON m.sender_id = sender.id
                         LEFT JOIN projects sp ON sp.id = sender.project_id
                         JOIN projects p ON m.project_id = p.id
+                        WHERE p.mailbox_state = 'active'
                         ORDER BY m.created_ts DESC
                         LIMIT :limit
                         """
@@ -2140,7 +2185,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                     if include_projects:
                         rows = await session.execute(
-                            text("SELECT id, slug, human_key, created_at, archived_at FROM projects ORDER BY created_at DESC")
+                        text("SELECT id, slug, human_key, created_at, archived_at FROM projects WHERE mailbox_state = 'active' ORDER BY created_at DESC")
                         )
                         for r in rows.fetchall():
                             project_id = int(r[0])
@@ -2190,14 +2235,18 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         async def delete_messages_api(request: Request) -> JSONResponse:
             """Permanently delete messages by ID (cross-project).
 
-            Removes messages from the SQLite database AND deletes the
-            corresponding markdown files from the Git archive.
+            Remove database messages without modifying retained legacy archives.
             """
             await ensure_schema()
 
             try:
                 request_body = await request.json()
+                if not isinstance(request_body, dict):
+                    raise HTTPException(status_code=400, detail="Expected an object")
                 message_ids: list[int] = request_body.get("message_ids", [])
+
+                if not isinstance(message_ids, list) or any(type(mid) is not int or mid < 1 for mid in message_ids):
+                    raise HTTPException(status_code=400, detail="Message IDs must be positive integers")
 
                 if not message_ids:
                     raise HTTPException(status_code=400, detail="No message IDs provided")
@@ -2209,49 +2258,20 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     )
 
                 deleted_count = 0
-                messages_by_project: dict[str, list[tuple[Any, ...]]] = {}
-                recip_map: dict[int, list[str]] = {}
                 async with get_session() as session:
                     placeholders = ','.join([f':mid{i}' for i in range(len(message_ids))])
                     id_params: dict[str, Any] = {f"mid{i}": mid for i, mid in enumerate(message_ids)}
 
-                    # Fetch message metadata for Git cleanup
-                    rows = await session.execute(
-                        text(
-                            f"""
-                            SELECT m.id, m.created_ts, m.subject, s.name AS sender_name,
-                                   p.slug AS project_slug
-                            FROM messages m
-                            JOIN agents s ON s.id = m.sender_id
-                            JOIN projects p ON p.id = m.project_id
-                            WHERE m.id IN ({placeholders})
-                            """
-                        ),
-                        id_params,
-                    )
-                    messages_to_delete = [tuple(row) for row in rows.fetchall()]
-
-                    if not messages_to_delete:
-                        return JSONResponse({"success": True, "deleted_count": 0})
-
-                    # Collect recipients per message
-                    recip_rows = await session.execute(
-                        text(
-                            f"""
-                            SELECT mr.message_id, a.name
-                            FROM message_recipients mr
-                            JOIN agents a ON a.id = mr.agent_id
-                            WHERE mr.message_id IN ({placeholders})
-                            """
-                        ),
-                        id_params,
-                    )
-                    for rr in recip_rows.fetchall():
-                        recip_map.setdefault(int(rr[0]), []).append(rr[1])
-
-                    for mrow in messages_to_delete:
-                        slug = str(mrow[4])
-                        messages_by_project.setdefault(slug, []).append(mrow)
+                    await session.execute(text("BEGIN IMMEDIATE"))
+                    unavailable = await session.scalar(text(
+                        f"SELECT 1 FROM messages m JOIN projects p ON p.id = m.project_id "
+                        f"WHERE m.id IN ({placeholders}) AND p.mailbox_state != 'active' LIMIT 1"
+                    ), id_params)
+                    if unavailable is not None:
+                        raise HTTPException(status_code=409, detail="Restore the mailbox before deleting messages")
+                    await session.execute(text(
+                        f"UPDATE messages SET reply_to = NULL WHERE reply_to IN ({placeholders})"
+                    ), id_params)
 
                     # Delete from SQLite
                     await session.execute(
@@ -2265,28 +2285,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     deleted_count = int(getattr(del_result, "rowcount", 0) or 0)
                     await session.commit()
 
-                settings = get_settings()
-                total_git_files_removed = 0
-                for project_slug, proj_msgs in messages_by_project.items():
-                    try:
-                        total_git_files_removed += await _delete_messages_from_archive(
-                            settings=settings,
-                            project_slug=project_slug,
-                            messages_to_delete=proj_msgs,
-                            recip_map=recip_map,
-                            commit_message=f"delete: {len(proj_msgs)} message(s) via web UI\n",
-                        )
-                    except Exception as archive_exc:
-                        logging.getLogger(__name__).warning(
-                            "Git archive cleanup failed for project %s: %s",
-                            project_slug,
-                            archive_exc,
-                        )
-
                 return JSONResponse({
                     "success": True,
                     "deleted_count": deleted_count,
-                    "git_files_removed": total_git_files_removed,
                 })
 
             except HTTPException:
@@ -2316,6 +2317,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     agent = await session.get(Agent, agent_id)
                     if not agent:
                         raise HTTPException(status_code=404, detail="Agent not found")
+                    project = await session.get(Project, agent.project_id)
+                    if project is None or project.mailbox_state != "active":
+                        raise HTTPException(status_code=410, detail="Mailbox is unavailable")
                     agent.retired_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     session.add(agent)
                     await session.commit()
@@ -2341,6 +2345,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     agent = await session.get(Agent, agent_id)
                     if not agent:
                         raise HTTPException(status_code=404, detail="Agent not found")
+                    project = await session.get(Project, agent.project_id)
+                    if project is None or project.mailbox_state != "active":
+                        raise HTTPException(status_code=410, detail="Mailbox is unavailable")
                     agent.retired_at = None
                     session.add(agent)
                     await session.commit()
@@ -2403,6 +2410,67 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to unarchive project: {exc!s}") from exc
 
+        @fastapi_app.post("/mail/api/mailboxes/by-slug/{slug}/activity")
+        async def record_mailbox_view(slug: str, request: Request) -> JSONResponse:
+            from .lifecycle import touch_project
+
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                raise HTTPException(status_code=403, detail="Cross-site mailbox updates are not allowed")
+            await ensure_schema(settings)
+            async with get_session() as session:
+                project = await session.scalar(select(Project).where(Project.slug == slug))
+                if project is None or project.id is None:
+                    raise HTTPException(status_code=404, detail="Mailbox not found")
+                if project.mailbox_state != "active":
+                    raise HTTPException(status_code=410, detail="Mailbox is unavailable")
+                await touch_project(project.id)
+            return JSONResponse({"success": True})
+
+        @fastapi_app.get("/mail/activity", response_class=HTMLResponse)
+        async def mailbox_activity(request: Request, project_id: int | None = None) -> HTMLResponse:
+            await ensure_schema(settings)
+            async with get_session() as session:
+                rows = (await session.execute(text(
+                    "SELECT m.id AS message_id, 'message' AS kind, m.subject AS detail, m.created_ts AS occurred_at, "
+                    "p.slug, p.human_key FROM messages m JOIN projects p ON p.id = m.project_id "
+                    "WHERE p.mailbox_state = 'active' AND (:pid IS NULL OR p.id = :pid) "
+                    "UNION ALL SELECT NULL, e.event_type, '', e.created_at, p.slug, p.human_key "
+                    "FROM mailbox_events e JOIN projects p ON p.id = e.project_id "
+                    "WHERE e.event_type != 'message' AND (:pid IS NULL OR p.id = :pid) "
+                    "ORDER BY occurred_at DESC LIMIT 200"
+                ), {"pid": project_id})).mappings().all()
+            if project_id is not None and request.headers.get("sec-fetch-mode") == "navigate":
+                from .lifecycle import touch_project
+
+                await touch_project(project_id)
+            return await _render("mail_activity.html", events=[dict(row) for row in rows])
+
+        @fastapi_app.get("/mail/mailboxes", response_class=HTMLResponse)
+        async def mail_mailboxes() -> HTMLResponse:
+            from .lifecycle import list_mailboxes
+
+            await ensure_schema(settings)
+            return await _render("mail_mailboxes.html", mailboxes=await list_mailboxes())
+
+        @fastapi_app.post("/mail/api/mailboxes/{project_id}", response_class=JSONResponse)
+        async def configure_mailbox_api(project_id: int, request: Request) -> JSONResponse:
+            from .lifecycle import configure_mailbox
+            await ensure_schema(settings)
+
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                raise HTTPException(status_code=403, detail="Cross-site changes are not allowed")
+            try:
+                data = await request.json()
+                if not isinstance(data, dict) or set(data) - {"mailbox_type", "retention_days", "action"}:
+                    raise ValueError("Invalid mailbox settings")
+                if "retention_days" in data and type(data["retention_days"]) is not int:
+                    raise ValueError("Retention must be an integer")
+                return JSONResponse(await configure_mailbox(project_id, **data))
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         @fastapi_app.get("/mail/projects", response_class=HTMLResponse)
         async def mail_projects_list() -> HTMLResponse:
             """Projects list view (moved from /mail)"""
@@ -2411,7 +2479,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             sibling_map = await get_project_sibling_data()
             async with get_session() as session:
                 rows = await session.execute(
-                    text("SELECT id, slug, human_key, created_at, archived_at FROM projects ORDER BY created_at DESC")
+                        text("SELECT id, slug, human_key, created_at, archived_at FROM projects WHERE mailbox_state = 'active' ORDER BY created_at DESC")
                 )
                 projects = []
                 for r in rows.fetchall():
@@ -2664,7 +2732,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                 # Get recent messages across all projects with thread information
                 # Build WHERE clause safely using parameterized queries
-                importance_conditions = []
+                importance_conditions = ["p.mailbox_state = 'active'"]
                 query_params = {"lim": limit}
 
                 if filter_importance and filter_importance.lower() in ["urgent", "high"]:
@@ -2961,14 +3029,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             if body_html:
                 body_html = _html_cleaner.clean(body_html)
 
-            # Get commit SHA for provenance badge
             commit_sha = None
-            try:
-                settings = get_settings()
-                archive = await ensure_archive(settings, prow[1])
-                commit_sha = await get_message_commit_sha(archive, mid)
-            except Exception:
-                pass  # Commit SHA is optional
 
             sender_display, sender_meta = _http_sender_identity(
                 message_project_id=pid,
@@ -3735,7 +3796,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 message_id: int | None = None
                 valid_recipients: list[str] = []
                 project_slug = ""
-                project_human_key = ""
                 overseer_name = "HumanOverseer"
                 now = datetime.now(timezone.utc).replace(tzinfo=None)
                 async with get_session() as session:
@@ -3752,7 +3812,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     # Extract project info consistently
                     project_id = int(prow[0])
                     project_slug = prow[1]
-                    project_human_key = prow[2]
+                    prow[2]
 
                     # Get or create "HumanOverseer" agent (with race condition protection)
                     overseer_row = (
@@ -3885,43 +3945,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
                     await session.commit()
 
-                from .storage import ensure_archive, write_message_bundle
-
-                settings = get_settings()
-                archive = await ensure_archive(settings, project_slug)
-                message_dict = {
-                    "id": message_id,
-                    "thread_id": thread_id,
-                    "project": project_human_key,
-                    "project_slug": project_slug,
-                    "from": overseer_name,
-                    "to": valid_recipients,
-                    "cc": [],
-                    "bcc": [],
-                    "subject": subject,
-                    "importance": "high",
-                    "ack_required": False,
-                    "created": now.isoformat(),
-                    "attachments": [],
-                }
-
-                try:
-                    async with archive_write_lock(archive):
-                        await write_message_bundle(
-                            archive,
-                            message_dict,
-                            full_body,
-                            overseer_name,
-                            valid_recipients,
-                            extra_paths=None,
-                            commit_text=f"Human Overseer message: {subject}",
-                            sender_outbox_name=overseer_name,
-                        )
-                except Exception as git_error:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Failed to write message to Git archive: {git_error!s}"
-                    ) from git_error
 
                 return JSONResponse({
                     "success": True,

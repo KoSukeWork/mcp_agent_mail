@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
-from git import Repo
 from PIL import Image
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -83,13 +82,11 @@ async def test_messaging_flow(isolated_env):
         assert "BlueLake" in text_payload
 
         storage_root = Path(get_settings().storage.root).expanduser().resolve()
-        profile = storage_root / "projects" / "backend" / "agents" / "BlueLake" / "profile.json"
-        assert profile.exists()
-        message_file = next(iter((storage_root / "projects" / "backend" / "messages").rglob("*.md")))
-        assert "Test" in message_file.read_text()
-        with Repo(str(storage_root)) as repo:
-            commit_message = str(repo.head.commit.message)
-        assert "mail: BlueLake -> BlueLake | Test" in commit_message
+        assert not (storage_root / ".git").exists()
+        assert not (storage_root / "projects" / "backend" / "messages").exists()
+        async with get_session() as session:
+            assert (await session.execute(text("SELECT subject, body_md FROM messages"))).one() == ("Test", "hello")
+            assert (await session.execute(text("SELECT count(*) FROM mailbox_events WHERE event_type = 'message'"))).scalar_one() == 1
 
 
 @pytest.mark.asyncio
