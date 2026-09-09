@@ -1206,7 +1206,7 @@ async def test_search_and_summarize_thread_respect_recipient_visibility(isolated
 
 
 @pytest.mark.asyncio
-async def test_send_message_is_database_authoritative_and_does_not_open_git(isolated_env, monkeypatch):
+async def test_send_message_is_database_authoritative_and_does_not_open_git(isolated_env):
     from sqlalchemy import func, select as sa_select
 
     from mcp_agent_mail.models import Message, MessageRecipient
@@ -1218,11 +1218,6 @@ async def test_send_message_is_database_authoritative_and_does_not_open_git(isol
             "register_agent",
             {"project_key": "Backend", "program": "codex", "model": "gpt-5", "name": "BlueLake"},
         )
-
-        def _boom(*_args, **_kwargs):
-            raise AssertionError("Normal message delivery must not open the retained Git archive")
-
-        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", _boom)
 
         result = await client.call_tool(
             "send_message",

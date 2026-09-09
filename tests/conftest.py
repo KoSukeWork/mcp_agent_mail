@@ -8,7 +8,6 @@ import pytest
 
 from mcp_agent_mail.config import clear_settings_cache
 from mcp_agent_mail.db import reset_database_state
-from mcp_agent_mail.storage import clear_repo_cache
 
 # CPU overload threshold - skip benchmark tests if ALL cores are at this level
 CPU_OVERLOAD_THRESHOLD = 95.0
@@ -107,13 +106,9 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("INLINE_IMAGE_MAX_BYTES", "128")
     clear_settings_cache()
     reset_database_state()
-    # Clear repo cache before test to ensure isolation
-    clear_repo_cache()
     try:
         yield
     finally:
-        # Close all cached Repo objects first (prevents file handle leaks)
-        clear_repo_cache()
         # Dispose database engine/pool state before forcing GC so SQLAlchemy
         # returns pooled connections cleanly instead of warning during finalizers.
         reset_database_state()
@@ -149,26 +144,13 @@ def isolated_env(tmp_path, monkeypatch):
             gc.collect()
 
         clear_settings_cache()
-        # ``tmp_path`` owns filesystem cleanup. Do not eagerly unlink its
-        # contents while the completed test frame can still retain GitPython
-        # pack-file objects; Windows correctly refuses to remove those open
-        # files. Pytest removes its numbered base directories after the test
-        # process has released all handles.
+        # ``tmp_path`` owns filesystem cleanup; do not eagerly unlink it.
 
 
 @pytest.fixture(autouse=True)
 def _global_resource_cleanup():
-    """Best-effort global cleanup to avoid FD leaks under low ulimit.
-
-    Some tests don't opt into `isolated_env` but still touch the global engine/repo cache.
-    With RLIMIT_NOFILE=256 (common on macOS), a small amount of leakage can cascade into
-    EMFILE failures later in the suite.
-    """
+    """Best-effort database and source-repository cleanup under low ulimit."""
     yield
-
-    # Close cached repo handles first.
-    with contextlib.suppress(Exception):
-        clear_repo_cache()
 
     # Dispose engine/pool state across tests.
     with contextlib.suppress(Exception):

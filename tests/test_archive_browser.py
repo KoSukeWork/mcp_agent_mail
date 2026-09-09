@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from mcp_agent_mail import app as app_module, cli as cli_module, http as http_module, storage
+from mcp_agent_mail import app as app_module, cli as cli_module, http as http_module
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.db import ensure_schema
@@ -13,14 +13,10 @@ from mcp_agent_mail.http import build_http_app
 
 
 @pytest.mark.asyncio
-async def test_git_history_routes_are_not_registered(isolated_env, monkeypatch):
+async def test_git_history_routes_are_not_registered(isolated_env):
     settings = get_settings()
     await ensure_schema()
 
-    async def forbidden(*args, **kwargs):
-        raise AssertionError("HTTP data access must not initialize Git")
-
-    monkeypatch.setattr(storage, "_ensure_repo", forbidden)
     original = Path(settings.storage.root) / "projects" / "offline" / "retained.txt"
     original.parent.mkdir(parents=True)
     original.write_text("Retain the original archive", encoding="utf-8")

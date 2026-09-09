@@ -593,11 +593,7 @@ class TestHTTPLockScope:
                 finally:
                     session_depth -= 1
 
-        def reject_git_open(*args: Any, **kwargs: Any):
-            raise AssertionError("Normal message delivery must not open the retained Git archive")
-
         monkeypatch.setattr(http_module, "get_session", tracking_get_session)
-        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", reject_git_open)
 
         settings = _config.get_settings()
         server = build_mcp_server()
@@ -676,7 +672,6 @@ class TestHTTPLockScope:
             await session.commit()
 
         session_depth = 0
-        archive_depths: list[int] = []
         original_get_session = http_module.get_session
 
         @contextlib.asynccontextmanager
@@ -689,12 +684,7 @@ class TestHTTPLockScope:
                 finally:
                     session_depth -= 1
 
-        def reject_git_open(*args: Any, **kwargs: Any):
-            archive_depths.append(session_depth)
-            raise AssertionError("Message deletion must not open the legacy Git repository")
-
         monkeypatch.setattr(http_module, "get_session", tracking_get_session)
-        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", reject_git_open)
 
         settings = _config.get_settings()
         server = build_mcp_server()
@@ -709,7 +699,6 @@ class TestHTTPLockScope:
 
         assert response.status_code == 200
         assert response.json()["deleted_count"] == 1
-        assert archive_depths == []
         assert session_depth == 0
 
     @pytest.mark.asyncio
@@ -771,7 +760,6 @@ class TestHTTPLockScope:
             await session.commit()
 
         session_depth = 0
-        archive_depths: list[int] = []
         original_get_session = http_module.get_session
 
         @contextlib.asynccontextmanager
@@ -784,12 +772,7 @@ class TestHTTPLockScope:
                 finally:
                     session_depth -= 1
 
-        def reject_git_open(*args: Any, **kwargs: Any):
-            archive_depths.append(session_depth)
-            raise AssertionError("Message deletion must not open the legacy Git repository")
-
         monkeypatch.setattr(http_module, "get_session", tracking_get_session)
-        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", reject_git_open)
 
         settings = _config.get_settings()
         server = build_mcp_server()
@@ -804,7 +787,6 @@ class TestHTTPLockScope:
 
         assert response.status_code == 200
         assert response.json()["deleted_count"] == 1
-        assert archive_depths == []
         assert session_depth == 0
 
     @pytest.mark.asyncio
@@ -846,11 +828,7 @@ class TestHTTPLockScope:
                 finally:
                     session_depth -= 1
 
-        def reject_git_open(*args: Any, **kwargs: Any):
-            raise AssertionError("ACK escalation must not open the retained Git archive")
-
         monkeypatch.setattr(http_module, "get_session", tracking_get_session)
-        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", reject_git_open)
         settings = _config.get_settings()
         holder_id, holder_name = await http_module._ensure_ack_escalation_holder(
             settings=settings,

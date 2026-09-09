@@ -101,11 +101,12 @@ async def test_tooling_locks_resource(isolated_env):
     settings = _config.get_settings()
     storage_root = Path(settings.storage.root).expanduser().resolve()
     storage_root.mkdir(parents=True, exist_ok=True)
-    lock_path = storage_root / ".archive.lock"
+    lock_path = storage_root / ".mailbox-locks" / "tooling.lock"
+    lock_path.parent.mkdir(parents=True)
     lock_path.touch()
-    metadata_path = storage_root / ".archive.lock.owner.json"
+    metadata_path = lock_path.parent / f"{lock_path.name}.owner.json"
     # Use current process PID and recent timestamp so lock is not considered stale
-    # (heal_archive_locks runs at server startup and would remove stale locks)
+    # Keep the lock recent enough for the read-only diagnostics path.
     metadata_path.write_text(json.dumps({"pid": os.getpid(), "created_ts": time.time()}), encoding="utf-8")
 
     async with Client(server) as client:

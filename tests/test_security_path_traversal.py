@@ -20,9 +20,8 @@ from fastmcp import Client
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.storage import (
-    ensure_archive,
-    get_archive_tree,
-    get_file_content,
+    _resolve_archive_relative_path,
+    ensure_mailbox_storage,
 )
 from mcp_agent_mail.utils import sanitize_agent_name, validate_agent_name_format
 
@@ -87,105 +86,23 @@ class TestAgentNamePathSanitization:
 
 
 class TestArchivePathTraversal:
-    """Tests for archive tree/content path traversal prevention."""
+    """Managed attachment paths remain contained without a Git browser."""
 
     @pytest.mark.asyncio
-    async def test_get_archive_tree_rejects_parent_traversal(self, isolated_env):
-        """get_archive_tree rejects paths with parent directory traversal."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "path-test-1")
-
+    @pytest.mark.parametrize(
+        "raw_path",
+        ("../../../etc", "..", "valid/../../../etc", "messages/..", "/etc/passwd", "..\\..\\etc"),
+    )
+    async def test_managed_path_rejects_traversal(self, isolated_env, raw_path):
+        storage = await ensure_mailbox_storage(get_settings(), "path-test")
         with pytest.raises(ValueError, match="directory traversal"):
-            await get_archive_tree(archive, "../../../etc")
+            _resolve_archive_relative_path(storage, raw_path)
 
     @pytest.mark.asyncio
-    async def test_get_archive_tree_rejects_dotdot_path(self, isolated_env):
-        """get_archive_tree rejects pure '..' path."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "path-test-2")
-
-        with pytest.raises(ValueError, match="directory traversal"):
-            await get_archive_tree(archive, "..")
-
-    @pytest.mark.asyncio
-    async def test_get_archive_tree_rejects_embedded_traversal(self, isolated_env):
-        """get_archive_tree rejects paths with embedded /../."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "path-test-3")
-
-        with pytest.raises(ValueError, match="directory traversal"):
-            await get_archive_tree(archive, "valid/../../../etc")
-
-    @pytest.mark.asyncio
-    async def test_get_archive_tree_rejects_trailing_dotdot(self, isolated_env):
-        """get_archive_tree rejects paths ending with /.."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "path-test-4")
-
-        with pytest.raises(ValueError, match="directory traversal"):
-            await get_archive_tree(archive, "messages/..")
-
-    @pytest.mark.asyncio
-    async def test_get_archive_tree_rejects_absolute_path(self, isolated_env):
-        """get_archive_tree rejects absolute paths."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "path-test-5")
-
-        with pytest.raises(ValueError, match="directory traversal"):
-            await get_archive_tree(archive, "/etc/passwd")
-
-    @pytest.mark.asyncio
-    async def test_get_archive_tree_rejects_backslash_traversal(self, isolated_env):
-        """get_archive_tree rejects Windows-style backslash traversal."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "path-test-6")
-
-        # Backslashes are normalized to forward slashes, so ..\ becomes ../
-        with pytest.raises(ValueError, match="directory traversal"):
-            await get_archive_tree(archive, "..\\..\\..\\etc")
-
-    @pytest.mark.asyncio
-    async def test_get_file_content_rejects_parent_traversal(self, isolated_env):
-        """get_file_content rejects paths with parent directory traversal."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "content-test-1")
-
-        with pytest.raises(ValueError, match="directory traversal"):
-            await get_file_content(archive, "../../../etc/passwd")
-
-    @pytest.mark.asyncio
-    async def test_get_file_content_rejects_dotdot_only(self, isolated_env):
-        """get_file_content rejects pure '..' path."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "content-test-2")
-
-        with pytest.raises(ValueError, match="directory traversal"):
-            await get_file_content(archive, "..")
-
-    @pytest.mark.asyncio
-    async def test_get_file_content_rejects_embedded_traversal(self, isolated_env):
-        """get_file_content rejects paths with embedded /../."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "content-test-3")
-
-        with pytest.raises(ValueError, match="directory traversal"):
-            await get_file_content(archive, "agents/test/../../../etc/passwd")
-
-    @pytest.mark.asyncio
-    async def test_get_archive_tree_allows_valid_paths(self, isolated_env):
-        """get_archive_tree allows legitimate nested paths."""
-        settings = get_settings()
-        archive = await ensure_archive(settings, "valid-path-test")
-
-        # These should not raise - they're valid relative paths
-        result = await get_archive_tree(archive, "")
-        assert isinstance(result, list)
-
-        result = await get_archive_tree(archive, "messages")
-        assert isinstance(result, list)
-
-        result = await get_archive_tree(archive, "agents")
-        assert isinstance(result, list)
+    async def test_managed_path_allows_valid_relative_path(self, isolated_env):
+        storage = await ensure_mailbox_storage(get_settings(), "valid-path-test")
+        result = _resolve_archive_relative_path(storage, "attachments/example.webp")
+        assert result == storage.root / "attachments" / "example.webp"
 
 
 # ============================================================================

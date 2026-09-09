@@ -10,7 +10,6 @@ Tests concurrent access patterns including:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
 from fastmcp import Client
@@ -19,7 +18,7 @@ from sqlalchemy import text
 from mcp_agent_mail import config as _config
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import ensure_schema, get_session
-from mcp_agent_mail.storage import AsyncFileLock, _commit_lock_path
+from mcp_agent_mail.models import Agent
 
 pytestmark = pytest.mark.slow
 
@@ -478,6 +477,13 @@ async def test_concurrent_message_read_write(isolated_env):
 
         row = await session.execute(text("SELECT id FROM projects WHERE slug = :slug"), {"slug": "db-concurrent"})
         project_id = row.scalar()
+        assert isinstance(project_id, int)
+        sender = Agent(project_id=project_id, name="ConcurrentSender", program="test", model="test")
+        session.add(sender)
+        await session.commit()
+        await session.refresh(sender)
+        assert isinstance(sender.id, int)
+        sender_id = sender.id
 
     async def write_message(i: int) -> None:
         """Write a message."""
@@ -485,9 +491,16 @@ async def test_concurrent_message_read_write(isolated_env):
             await session.execute(
                 text(
                     "INSERT INTO messages (project_id, subject, body_md, importance, ack_required, sender_id, created_ts) "
-                    "VALUES (:pid, :subj, :body, :imp, :ack, 1, datetime('now'))"
-                ),
-                {"pid": project_id, "subj": f"Msg {i}", "body": f"Body {i}", "imp": "normal", "ack": 0},
+                        "VALUES (:pid, :subj, :body, :imp, :ack, :sender_id, datetime('now'))"
+                    ),
+                    {
+                        "pid": project_id,
+                        "subj": f"Msg {i}",
+                        "body": f"Body {i}",
+                        "imp": "normal",
+                        "ack": 0,
+                        "sender_id": sender_id,
+                    },
             )
             await session.commit()
 
@@ -535,38 +548,3 @@ async def test_concurrent_managed_projection_writes(isolated_env):
     assert errors == []
     assert len(list((storage.root / "file_reservations").glob("id-*.json"))) == 5
     assert not (storage.repo_root / ".git").exists()
-
-
-# =============================================================================
-# Commit Lock Scoping Tests
-# =============================================================================
-
-
-def test_commit_lock_path_scopes_to_project(tmp_path: Path) -> None:
-    repo_root = tmp_path
-    rel_paths = [
-        "projects/alpha/agents/GreenLake/profile.json",
-        "projects/alpha/messages/2026/01/msg.md",
-    ]
-    lock_path = _commit_lock_path(repo_root, rel_paths)
-    assert lock_path == repo_root / "projects" / "alpha" / ".commit.lock"
-
-
-def test_commit_lock_path_falls_back_for_mixed_paths(tmp_path: Path) -> None:
-    repo_root = tmp_path
-    rel_paths = [
-        "projects/alpha/agents/GreenLake/profile.json",
-        "projects/beta/messages/2026/01/msg.md",
-    ]
-    lock_path = _commit_lock_path(repo_root, rel_paths)
-    assert lock_path == repo_root / ".commit.lock"
-
-
-@pytest.mark.asyncio
-async def test_commit_lock_paths_do_not_block_across_projects(tmp_path: Path) -> None:
-    repo_root = tmp_path
-    lock_a = _commit_lock_path(repo_root, ["projects/alpha/messages/2026/01/a.md"])
-    lock_b = _commit_lock_path(repo_root, ["projects/beta/messages/2026/01/b.md"])
-
-    async with AsyncFileLock(lock_a, timeout_seconds=0.5), AsyncFileLock(lock_b, timeout_seconds=0.5):
-        assert lock_a != lock_b

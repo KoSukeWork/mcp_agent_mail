@@ -11,11 +11,11 @@
 - The database becomes the authoritative store. Runtime mail operations must not require a Git archive.
 - Existing archives remain untouched until migration reconciliation is reviewed. Backups have a separate retention policy.
 
-## Current architecture and consequences
+## Initial architecture and migration consequences
 
-`models.Project` currently has only identity, creation and manual archival fields. Manual `archived_at` is not an expiration or trash marker and must not be repurposed.
+Before this work, `models.Project` had only identity, creation and manual archival fields. Manual `archived_at` remains distinct from expiration and trash state.
 
-`storage.ensure_archive()` opens one shared Git repository at the configured storage root and creates project directories below `projects/`. Removing current files does not remove their Git history. Per-project cleanup must therefore not claim to reclaim historical Git objects.
+The retired `storage.ensure_archive()` implementation opened one shared Git repository at the configured storage root and created project directories below `projects/`. Those original directories and Git objects remain preserved migration inputs; managed mailbox cleanup does not claim to reclaim them. The runtime implementation and its storage-level Git helpers have now been removed.
 
 `db.ensure_schema()` creates SQLModel tables and then runs SQLite index/FTS setup. Existing databases require explicit, idempotent column migration; creating metadata alone does not update existing tables. New lifecycle migrations must inspect columns and propagate unexpected errors, not suppress all exceptions.
 
@@ -162,7 +162,9 @@ Runtime retirement is complete: CLI, HTTP, MCP, workers, startup, activity, rete
 ACK escalation, deletion, and Guard projection paths do not import or invoke Git mailbox data
 operations. The obsolete HTTP implementations and seven archive templates were removed; legacy
 profile/message Git writers were removed, and managed reservation projections no longer commit.
-Low-level historical archive readers and recovery primitives remain isolated in `storage.py` only
-for retained-fixture/forensic coverage; they are not registered, imported by runtime entry points,
-or a supported mailbox persistence API. Full CI and the latest homepage's complete real-browser
-acceptance remain pending.
+The residual Git mailbox repository cache, commit queue, archive readers, lock healer, and legacy
+diagnostic bundle backup/restore primitives have also been removed from `storage.py`. Retained
+archives are read only by the explicit `archive import-legacy` inventory/import path; runtime
+mailbox storage now contains only managed attachments, reservation projections, mailbox locks, and
+local notification signals. Full CI and the latest homepage's complete real-browser acceptance
+remain pending.

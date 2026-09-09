@@ -14,7 +14,6 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 
-from mcp_agent_mail import storage
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.config import clear_settings_cache, get_settings
 from mcp_agent_mail.db import ensure_schema, get_session
@@ -40,14 +39,7 @@ async def make_project(slug="sample"):
 
 
 @pytest.mark.asyncio
-async def test_agent_inbox_deletion_is_database_only_and_project_scoped(isolated_env, monkeypatch):
-    calls = []
-
-    async def forbidden(*args, **kwargs):
-        calls.append(args)
-        raise AssertionError("Inbox deletion must not open Git")
-
-    monkeypatch.setattr(storage, "_ensure_repo", forbidden)
+async def test_agent_inbox_deletion_is_database_only_and_project_scoped(isolated_env):
     own = await make_project("own")
     other = await make_project("other")
     ids = []
@@ -87,7 +79,7 @@ async def test_agent_inbox_deletion_is_database_only_and_project_scoped(isolated
         remaining_reply = await session.get(Message, reply_id)
         assert remaining_reply is not None and remaining_reply.reply_to is None
         assert await session.scalar(text("SELECT COUNT(*) FROM message_recipients WHERE message_id = :mid"), {"mid": ids[1]}) == 1
-    assert not calls
+    assert not (Path(get_settings().storage.root) / ".git").exists()
     assert legacy.read_text(encoding="utf-8") == "retained original"
 
 
@@ -168,10 +160,7 @@ async def test_cleanup_is_scoped_retryable_and_respects_grace(isolated_env, monk
 
 
 @pytest.mark.asyncio
-async def test_messaging_and_whois_do_not_open_git(isolated_env, monkeypatch):
-    async def forbidden(*args, **kwargs):
-        raise AssertionError("Normal mailbox operations must not open Git")
-    monkeypatch.setattr(storage, "_ensure_repo", forbidden)
+async def test_messaging_and_whois_do_not_open_git(isolated_env):
     async with Client(build_mcp_server()) as client:
         result = await client.call_tool("ensure_project", {"human_key": "/mailbox-test"})
         pid = result.data["id"]
