@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import cast
 
 from mcp_agent_mail.guard import render_precommit_script
-from mcp_agent_mail.storage import ProjectArchive
+from mcp_agent_mail.storage import MailboxStorage
 
 
 class _DummyArchive:
@@ -47,7 +47,7 @@ def test_precommit_bypass_allows_commit(tmp_path: Path) -> None:
     )
     # Run hook with bypass
     hook = repo / "pre-commit-test.py"
-    hook.write_text(render_precommit_script(cast(ProjectArchive, _DummyArchive(archive_root))), encoding="utf-8")
+    hook.write_text(render_precommit_script(cast(MailboxStorage, _DummyArchive(archive_root))), encoding="utf-8")
     env = os.environ.copy()
     env["WORKTREES_ENABLED"] = "1"
     env["AGENT_MAIL_GUARD_MODE"] = "block"

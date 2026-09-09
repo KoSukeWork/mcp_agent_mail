@@ -20,7 +20,7 @@ from mcp_agent_mail.guard import (
     render_prepush_script,
     uninstall_guard,
 )
-from mcp_agent_mail.storage import ensure_archive, write_file_reservation_record
+from mcp_agent_mail.storage import ensure_mailbox_storage, write_file_reservation_record
 
 
 def _init_git_repo(repo_path: Path) -> None:
@@ -92,7 +92,7 @@ async def test_guard_install_in_worktree(isolated_env, tmp_path: Path):
     _create_worktree(main_repo, worktree, "feature-branch")
 
     # Install guard in worktree
-    await ensure_archive(settings, "worktree-test")
+    await ensure_mailbox_storage(settings, "worktree-test")
     hook_path = await install_guard(settings, "worktree-test", worktree)
 
     # Hook should be installed in the worktree's git dir
@@ -116,7 +116,7 @@ async def test_guard_conflict_detection_in_worktree(isolated_env, tmp_path: Path
     _create_worktree(main_repo, worktree, "feature-branch")
 
     # Create archive with file reservation
-    archive = await ensure_archive(settings, "worktree-test")
+    archive = await ensure_mailbox_storage(settings, "worktree-test")
     await write_file_reservation_record(
         archive,
         {
@@ -508,7 +508,7 @@ async def test_guard_doesnt_overwrite_own_orig(isolated_env, tmp_path: Path):
 async def test_guard_gate_worktrees_enabled_true(isolated_env, tmp_path: Path):
     """Test guard runs when WORKTREES_ENABLED=1."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "gate-test")
+    archive = await ensure_mailbox_storage(settings, "gate-test")
     script = render_precommit_script(archive)
     script_path = tmp_path / "guard.py"
     script_path.write_text(script, encoding="utf-8")
@@ -531,7 +531,7 @@ async def test_guard_gate_worktrees_enabled_true(isolated_env, tmp_path: Path):
 async def test_guard_gate_worktrees_enabled_false(isolated_env, tmp_path: Path):
     """Test guard exits early when WORKTREES_ENABLED=0."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "gate-test")
+    archive = await ensure_mailbox_storage(settings, "gate-test")
 
     # Add a conflicting reservation
     await write_file_reservation_record(
@@ -565,7 +565,7 @@ async def test_guard_gate_worktrees_enabled_false(isolated_env, tmp_path: Path):
 async def test_guard_gate_git_identity_enabled(isolated_env, tmp_path: Path):
     """Test guard enforces conflicts when only GIT_IDENTITY_ENABLED=1 is set."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "gate-test")
+    archive = await ensure_mailbox_storage(settings, "gate-test")
     script = render_precommit_script(archive)
     script_path = tmp_path / "guard.py"
     script_path.write_text(script, encoding="utf-8")
@@ -604,7 +604,7 @@ async def test_guard_gate_git_identity_enabled(isolated_env, tmp_path: Path):
 async def test_guard_gate_various_true_values(isolated_env, tmp_path: Path):
     """Test guard recognizes various truthy values for gate."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "gate-test")
+    archive = await ensure_mailbox_storage(settings, "gate-test")
     script = render_precommit_script(archive)
     script_path = tmp_path / "guard.py"
     script_path.write_text(script, encoding="utf-8")
@@ -632,7 +632,7 @@ async def test_guard_gate_various_true_values(isolated_env, tmp_path: Path):
 async def test_guard_advisory_mode_warn(isolated_env, tmp_path: Path):
     """Test guard in advisory/warn mode doesn't block on conflicts."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "advisory-test")
+    archive = await ensure_mailbox_storage(settings, "advisory-test")
 
     # Add conflicting reservation
     await write_file_reservation_record(
@@ -674,7 +674,7 @@ async def test_guard_advisory_mode_warn(isolated_env, tmp_path: Path):
 async def test_guard_bypass_flag(isolated_env, tmp_path: Path):
     """Test AGENT_MAIL_BYPASS=1 bypasses all checks."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "bypass-test")
+    archive = await ensure_mailbox_storage(settings, "bypass-test")
 
     # Add conflicting reservation
     await write_file_reservation_record(
@@ -739,7 +739,7 @@ async def test_prepush_guard_install(isolated_env, tmp_path: Path):
 async def test_prepush_script_generation(isolated_env, tmp_path: Path):
     """Test pre-push script includes STDIN handling."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "prepush-test")
+    archive = await ensure_mailbox_storage(settings, "prepush-test")
 
     script = render_prepush_script(archive)
 

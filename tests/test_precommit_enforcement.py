@@ -26,7 +26,7 @@ import pytest
 
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.guard import render_precommit_script
-from mcp_agent_mail.storage import ensure_archive, write_file_reservation_record
+from mcp_agent_mail.storage import ensure_mailbox_storage, write_file_reservation_record
 
 # ============================================================================
 # Helper Functions
@@ -86,7 +86,7 @@ def run_precommit_script(
 async def test_precommit_blocks_conflicting_exclusive_reservation(isolated_env, tmp_path: Path):
     """Pre-commit should block when staged files conflict with another agent's exclusive reservation."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-1")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-1")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -117,7 +117,7 @@ async def test_precommit_blocks_conflicting_exclusive_reservation(isolated_env, 
 async def test_precommit_allows_when_no_conflicts(isolated_env, tmp_path: Path):
     """Pre-commit should allow commit when no conflicting reservations exist."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-2")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-2")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -143,7 +143,7 @@ async def test_precommit_allows_when_no_conflicts(isolated_env, tmp_path: Path):
 async def test_precommit_allows_own_reservation(isolated_env, tmp_path: Path):
     """Pre-commit should allow when the reservation is held by the same agent."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-3")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-3")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -177,7 +177,7 @@ async def test_precommit_allows_own_reservation(isolated_env, tmp_path: Path):
 async def test_precommit_ignores_shared_reservation(isolated_env, tmp_path: Path):
     """Pre-commit should ignore non-exclusive (shared) reservations."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-4")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-4")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -211,7 +211,7 @@ async def test_precommit_ignores_shared_reservation(isolated_env, tmp_path: Path
 async def test_precommit_ignores_expired_reservation(isolated_env, tmp_path: Path):
     """Pre-commit should ignore expired reservations."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-5")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-5")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -242,7 +242,7 @@ async def test_precommit_ignores_expired_reservation(isolated_env, tmp_path: Pat
 async def test_precommit_ignores_released_reservation(isolated_env, tmp_path: Path):
     """Pre-commit should ignore reservations that already have released_ts set."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-released")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-released")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -278,7 +278,7 @@ async def test_precommit_ignores_released_reservation(isolated_env, tmp_path: Pa
 async def test_precommit_bypass_allows_despite_conflict(isolated_env, tmp_path: Path):
     """AGENT_MAIL_BYPASS=1 should allow commit despite conflicts."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-6")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-6")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -313,7 +313,7 @@ async def test_precommit_bypass_allows_despite_conflict(isolated_env, tmp_path: 
 async def test_precommit_warn_mode_allows_with_warning(isolated_env, tmp_path: Path):
     """AGENT_MAIL_GUARD_MODE=warn should warn but allow commit."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-7")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-7")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -349,7 +349,7 @@ async def test_precommit_warn_mode_allows_with_warning(isolated_env, tmp_path: P
 async def test_precommit_missing_agent_name_fails(isolated_env, tmp_path: Path):
     """Pre-commit should fail if AGENT_NAME is not set."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-8")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-8")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -374,7 +374,7 @@ async def test_precommit_missing_agent_name_fails(isolated_env, tmp_path: Path):
 async def test_precommit_gate_disabled_exits_early(isolated_env, tmp_path: Path):
     """With WORKTREES_ENABLED=0, pre-commit should exit 0 without checking."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-9")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-9")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -405,7 +405,7 @@ async def test_precommit_gate_disabled_exits_early(isolated_env, tmp_path: Path)
 async def test_precommit_git_identity_gate_blocks_conflict(isolated_env, tmp_path: Path):
     """GIT_IDENTITY_ENABLED=1 should enable enforcement even when WORKTREES_ENABLED=0."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-git-identity")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-git-identity")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -444,7 +444,7 @@ async def test_precommit_git_identity_gate_blocks_conflict(isolated_env, tmp_pat
 async def test_precommit_glob_pattern_matches(isolated_env, tmp_path: Path):
     """Pre-commit should match glob patterns like src/** against src/app.py."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-10")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-10")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -473,7 +473,7 @@ async def test_precommit_glob_pattern_matches(isolated_env, tmp_path: Path):
 async def test_precommit_glob_pattern_no_match(isolated_env, tmp_path: Path):
     """Pre-commit should not match unrelated paths."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-11")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-11")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -507,7 +507,7 @@ async def test_precommit_glob_pattern_no_match(isolated_env, tmp_path: Path):
 async def test_precommit_multiple_conflicts_reported(isolated_env, tmp_path: Path):
     """Pre-commit should report multiple conflicts when present."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-12")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-12")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -551,7 +551,7 @@ async def test_precommit_multiple_conflicts_reported(isolated_env, tmp_path: Pat
 async def test_precommit_no_staged_files_allows(isolated_env, tmp_path: Path):
     """Pre-commit should allow when no files are staged."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-13")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-13")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")
@@ -588,7 +588,7 @@ async def test_precommit_no_staged_files_allows(isolated_env, tmp_path: Path):
 async def test_precommit_advisory_mode_synonym(isolated_env, tmp_path: Path):
     """AGENT_MAIL_GUARD_MODE=advisory should work same as warn."""
     settings = get_settings()
-    archive = await ensure_archive(settings, "enforcement-test-14")
+    archive = await ensure_mailbox_storage(settings, "enforcement-test-14")
     script_text = render_precommit_script(archive)
     script_path = tmp_path / "precommit.py"
     script_path.write_text(script_text, encoding="utf-8")

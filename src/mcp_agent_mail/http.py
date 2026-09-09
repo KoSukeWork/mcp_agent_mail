@@ -13,7 +13,7 @@ import logging
 import re
 from collections.abc import MutableMapping
 from datetime import datetime, timedelta, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Protocol, cast
 
 import structlog
@@ -53,22 +53,11 @@ from .localization import (
 )
 from .models import Project
 from .storage import (
-    ProjectArchive,
     archive_write_lock,
     collect_lock_status,
     ensure_mailbox_storage,
-    get_agent_communication_graph,
-    get_archive_tree,
-    get_commit_detail,
-    get_fd_headroom,
     get_fd_usage,
-    get_file_content,
-    get_historical_inbox_snapshot,
     get_lock_telemetry,
-    get_recent_commits,
-    get_repo_cache_stats,
-    get_timeline_commits,
-    proactive_fd_cleanup,
     write_file_reservation_record,
 )
 
@@ -201,35 +190,6 @@ def _expanduser_resolve_path(path: Path) -> Path:
     return path.expanduser().resolve()
 
 
-def _path_exists(path: Path) -> bool:
-    return path.exists()
-
-
-def _open_git_repo(repo_root: Path):
-    from git import Repo as GitRepo
-
-    return GitRepo(str(repo_root))
-
-
-async def _open_existing_project_archive(settings: Settings, slug: str) -> ProjectArchive | None:
-    """Open an existing project archive for read-only routes without creating new directories."""
-    repo_root = await asyncio.to_thread(_expanduser_resolve_path, Path(settings.storage.root))
-    if not await asyncio.to_thread(_path_exists, repo_root / ".git"):
-        return None
-    project_root = repo_root / "projects" / slug
-    if not await asyncio.to_thread(_path_exists, project_root):
-        return None
-    repo = await asyncio.to_thread(_open_git_repo, repo_root)
-    return ProjectArchive(
-        settings=settings,
-        slug=slug,
-        root=project_root,
-        repo=repo,
-        lock_path=project_root / ".archive.lock",
-        repo_root=repo_root,
-    )
-
-
 def _collect_retention_quota_report_sync(settings: Settings) -> dict[str, Any]:
     import fnmatch as _fnmatch
 
@@ -299,55 +259,6 @@ async def _collect_retention_quota_report(settings: Settings) -> dict[str, Any]:
     return report
 
 
-def _collect_archive_guide_stats_sync(settings: Settings) -> dict[str, Any]:
-    import subprocess as _subprocess
-    from itertools import islice
-
-    storage_root = str(_expanduser_resolve_path(Path(settings.storage.root)))
-    repo_root = Path(storage_root)
-    total_commits = "0"
-    project_count = 0
-    repo_size = "0 MB"
-    last_commit_time = "Never"
-
-    if _path_exists(repo_root / ".git"):
-        repo = None
-        try:
-            repo = _open_git_repo(repo_root)
-            commit_count = sum(1 for _ in repo.iter_commits(max_count=10000))
-            total_commits = "10,000+" if commit_count == 10000 else f"{commit_count:,}"
-            last_commit = next(repo.iter_commits(max_count=1), None)
-            last_commit_time = last_commit.authored_datetime.strftime("%b %d, %Y") if last_commit else "Never"
-
-            projects_dir = repo_root / "projects"
-            if projects_dir.exists():
-                project_count = sum(1 for p in islice(projects_dir.iterdir(), 100) if p.is_dir())
-
-            try:
-                result = _subprocess.run(
-                    ["du", "-sh", str(repo_root)],
-                    capture_output=True,
-                    text=True,
-                    timeout=5.0,
-                )
-                repo_size = result.stdout.split()[0] if getattr(result, "returncode", 1) == 0 else "Unknown"
-            except (_subprocess.TimeoutExpired, FileNotFoundError, PermissionError, OSError):
-                repo_size = "Unknown"
-        except Exception:
-            pass
-        finally:
-            if repo is not None:
-                repo.close()
-
-    return {
-        "storage_root": storage_root,
-        "total_commits": total_commits,
-        "project_count": project_count,
-        "repo_size": repo_size,
-        "last_commit_time": last_commit_time,
-    }
-
-
 def _decode_jwt_header_segment(token: str) -> dict[str, object] | None:
     """Return decoded JWT header without verifying signature."""
     try:
@@ -362,10 +273,6 @@ def _decode_jwt_header_segment(token: str) -> dict[str, object] | None:
 _LOGGING_CONFIGURED = False
 
 # Pre-compiled regex patterns for HTTP validators
-_SLUG_VALIDATOR_RE = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)
-_AGENT_NAME_VALIDATOR_RE = re.compile(r"^[A-Za-z0-9]+$")
-_TIMESTAMP_VALIDATOR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
-
 _LIKE_ESCAPE_CHAR = "!"
 
 
@@ -416,7 +323,7 @@ def _configure_logging(settings: Settings) -> None:
 
     # Add filter to suppress verbose tracebacks for expected/recoverable errors
     # FastMCP's tool_manager uses logger.exception() which prints full tracebacks
-    # even for expected errors like "agent not found" or "git lock contention".
+    # even for expected errors like "agent not found" or resource contention.
     # This filter intercepts those and removes the traceback for cleaner logs.
     class ExpectedErrorFilter(logging.Filter):
         """Filter that suppresses tracebacks for expected/recoverable tool errors.
@@ -424,7 +331,6 @@ def _configure_logging(settings: Settings) -> None:
         Expected errors include:
         - ToolExecutionError with recoverable=True
         - Agent not found / project not found
-        - Git index.lock contention
         - Resource busy / database lock
 
         These are normal operational conditions in multi-agent environments
@@ -434,8 +340,6 @@ def _configure_logging(settings: Settings) -> None:
         # Keywords that indicate an expected/recoverable error
         _EXPECTED_PATTERNS = (
             "not found in project",
-            "index.lock",
-            "git_index_lock",
             "resource_busy",
             "temporarily locked",
             "recoverable=true",
@@ -1251,7 +1155,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     current, limit = get_fd_usage()
                     if current >= 0 and limit > 0:
                         headroom_pct = (limit - current) / limit
-                        cache_stats = get_repo_cache_stats()
                         lock_stats = get_lock_telemetry()
 
                         if headroom_pct < 0.15:
@@ -1261,16 +1164,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 current_fds=current,
                                 fd_limit=limit,
                                 headroom_pct=round(headroom_pct * 100, 1),
-                                repo_cache=cache_stats,
                                 lock_telemetry=lock_stats,
                             )
-                            freed = proactive_fd_cleanup(threshold=limit)
-                            if freed:
-                                _fd_logger.warning(
-                                    "fd_health.emergency_cleanup",
-                                    freed=freed,
-                                    new_headroom=get_fd_headroom(),
-                                )
                         elif headroom_pct < 0.20:
                             # Low: proactive cleanup
                             _fd_logger.warning(
@@ -1278,16 +1173,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 current_fds=current,
                                 fd_limit=limit,
                                 headroom_pct=round(headroom_pct * 100, 1),
-                                repo_cache=cache_stats,
                                 lock_telemetry=lock_stats,
                             )
-                            freed = proactive_fd_cleanup(threshold=int(limit * 0.25))
-                            if freed:
-                                _fd_logger.info(
-                                    "fd_health.proactive_cleanup",
-                                    freed=freed,
-                                    new_headroom=get_fd_headroom(),
-                                )
                         elif headroom_pct < 0.30:
                             # Warning only
                             _fd_logger.warning(
@@ -1295,7 +1182,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                                 current_fds=current,
                                 fd_limit=limit,
                                 headroom_pct=round(headroom_pct * 100, 1),
-                                repo_cache=cache_stats,
                                 lock_telemetry=lock_stats,
                             )
                 except Exception:
@@ -3702,9 +3588,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         detail=f"Message body too long ({len(body_md)} characters). Maximum is {max_user_length} characters to accommodate the overseer preamble ({preamble_length} characters)."
                     )
 
-                # Keep database work and archive work in separate phases so
-                # the request never holds a live DB transaction while doing
-                # archive/Git I/O.
+                # Keep all message creation in one database transaction.
                 from datetime import datetime, timezone
                 message_id: int | None = None
                 valid_recipients: list[str] = []
@@ -3872,336 +3756,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 import traceback
                 traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Failed to send message: {e!s}") from e
-
-        # ========== Archive Visualization Routes ==========
-
-        def _validate_project_slug(slug: str) -> bool:
-            """Validate project slug format to prevent path traversal."""
-
-            # Slugs should only contain lowercase letters, numbers, hyphens, underscores
-            # No path separators or relative path components
-            if not slug:
-                return False
-            if slug in (".", "..", "/", "\\"):
-                return False
-            if "/" in slug or "\\" in slug or ".." in slug:
-                return False
-            # Should match safe slug pattern
-            return bool(_SLUG_VALIDATOR_RE.match(slug))
-
-        async def archive_guide() -> HTMLResponse:
-            """Display the archive access guide and overview."""
-            settings = get_settings()
-            guide_stats = await asyncio.to_thread(_collect_archive_guide_stats_sync, settings)
-
-            # Get list of projects for picker
-            async with get_session() as session:
-                rows = await session.execute(text("SELECT slug, human_key FROM projects ORDER BY human_key"))
-                projects = [{"slug": r[0], "human_key": r[1]} for r in rows.fetchall()]
-
-            return await _render(
-                "archive_guide.html",
-                storage_root=guide_stats["storage_root"],
-                total_commits=guide_stats["total_commits"],
-                project_count=guide_stats["project_count"],
-                repo_size=guide_stats["repo_size"],
-                last_commit_time=guide_stats["last_commit_time"],
-                projects=projects,
-            )
-
-        async def archive_activity(limit: int = 50) -> HTMLResponse:
-            """Display recent commits across all projects."""
-            # Validate and cap limit to prevent DoS
-            limit = max(1, min(limit, 500))  # Between 1 and 500
-
-            settings = get_settings()
-            repo_root = await asyncio.to_thread(_expanduser_resolve_path, Path(settings.storage.root))
-            if not await asyncio.to_thread(_path_exists, repo_root / ".git"):
-                return await _render("archive_activity.html", commits=[])
-
-            repo = None
-            try:
-                repo = await asyncio.to_thread(_open_git_repo, repo_root)
-                commits = await get_recent_commits(repo, limit=limit)
-                return await _render("archive_activity.html", commits=commits)
-            finally:
-                if repo is not None:
-                    await asyncio.to_thread(repo.close)
-
-        async def archive_commit(sha: str) -> HTMLResponse:
-            """Display detailed commit information with diffs."""
-            settings = get_settings()
-            repo_root = await asyncio.to_thread(_expanduser_resolve_path, Path(settings.storage.root))
-            if not await asyncio.to_thread(_path_exists, repo_root / ".git"):
-                return await _render("error.html", message="Archive repository not found")
-
-            repo = None
-            try:
-                repo = await asyncio.to_thread(_open_git_repo, repo_root)
-                commit = await get_commit_detail(repo, sha)
-                return await _render("archive_commit.html", commit=commit)
-            except ValueError:
-                # Validation errors (bad SHA, etc.)
-                return await _render("error.html", message="Invalid commit identifier")
-            except Exception:
-                # Don't leak error details
-                return await _render("error.html", message="Commit not found")
-            finally:
-                if repo is not None:
-                    await asyncio.to_thread(repo.close)
-
-        async def archive_timeline(project: str | None = None) -> HTMLResponse:
-            """Display communication timeline with Mermaid.js visualization."""
-            # Validate project slug if provided
-            if project and not _validate_project_slug(project):
-                return await _render("error.html", message="Invalid project identifier")
-
-            settings = get_settings()
-            repo_root = await asyncio.to_thread(_expanduser_resolve_path, Path(settings.storage.root))
-            if not await asyncio.to_thread(_path_exists, repo_root / ".git"):
-                return await _render("error.html", message="Archive repository not found")
-
-            # Default to first project if not specified
-            if not project:
-                async with get_session() as session:
-                    row = (
-                        await session.execute(text("SELECT slug, human_key FROM projects ORDER BY id LIMIT 1"))
-                    ).fetchone()
-                    if row:
-                        project = row[0]
-                    else:
-                        return await _render("error.html", message="No projects found")
-
-            # Get project name
-            project_name = project
-            async with get_session() as session:
-                row = (
-                    await session.execute(text("SELECT human_key FROM projects WHERE slug = :s"), {"s": project})
-                ).fetchone()
-                if row:
-                    project_name = row[0]
-
-            repo = None
-            try:
-                repo = await asyncio.to_thread(_open_git_repo, repo_root)
-                commits = await get_timeline_commits(repo, project, limit=100)
-                return await _render("archive_timeline.html", commits=commits, project=project, project_name=project_name)
-            finally:
-                if repo is not None:
-                    await asyncio.to_thread(repo.close)
-
-        async def archive_browser(project: str | None = None, path: str = "") -> HTMLResponse:
-            """Browse archive files and directories."""
-            if not project:
-                # Show project selector - requires project parameter
-                return await _render("error.html", message="Please select a project to browse")
-
-            # Validate project slug
-            if not _validate_project_slug(project):
-                return await _render("error.html", message="Invalid project identifier")
-
-            settings = get_settings()
-            archive = await _open_existing_project_archive(settings, project)
-            if archive is None:
-                return await _render("error.html", message="Project archive not found")
-            try:
-                tree = await get_archive_tree(archive, path)
-                return await _render("archive_browser.html", tree=tree, project=project, path=path)
-            except ValueError:
-                return await _render("error.html", message="Invalid archive path")
-            finally:
-                await asyncio.to_thread(archive.repo.close)
-
-        async def archive_browser_file(project: str, path: str) -> JSONResponse:
-            """Get file content from archive."""
-            # Validate project slug
-            if not _validate_project_slug(project):
-                raise HTTPException(status_code=400, detail="Invalid project identifier")
-
-            try:
-                settings = get_settings()
-                archive = await _open_existing_project_archive(settings, project)
-                if archive is None:
-                    raise HTTPException(status_code=404, detail="Project archive not found")
-                try:
-                    content = await get_file_content(archive, path)
-                finally:
-                    await asyncio.to_thread(archive.repo.close)
-
-                if content is None:
-                    raise HTTPException(status_code=404, detail="File not found")
-
-                return JSONResponse(content=content)
-            except ValueError as err:
-                # Path validation errors
-                raise HTTPException(status_code=400, detail="Invalid file path") from err
-            except HTTPException:
-                raise
-            except Exception as err:
-                raise HTTPException(status_code=404, detail="File not found") from err
-
-        async def archive_browser_download(project: str, path: str) -> Response:
-            """Download a file from the archive as an attachment (#221)."""
-            # Validate project slug
-            if not _validate_project_slug(project):
-                raise HTTPException(status_code=400, detail="Invalid project identifier")
-
-            try:
-                settings = get_settings()
-                archive = await _open_existing_project_archive(settings, project)
-                if archive is None:
-                    raise HTTPException(status_code=404, detail="Project archive not found")
-                try:
-                    content = await get_file_content(archive, path)
-                finally:
-                    await asyncio.to_thread(archive.repo.close)
-
-                if content is None:
-                    raise HTTPException(status_code=404, detail="File not found")
-
-                # Derive a safe download filename from the (already validated)
-                # path's basename; strip any directory components and quotes.
-                filename = PurePosixPath(path.replace("\\", "/")).name or "download"
-                filename = filename.replace('"', "").replace("\r", "").replace("\n", "")
-                return Response(
-                    content=content,
-                    media_type="application/octet-stream",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-                )
-            except ValueError as err:
-                # Path validation errors
-                raise HTTPException(status_code=400, detail="Invalid file path") from err
-            except HTTPException:
-                raise
-            except Exception as err:
-                raise HTTPException(status_code=404, detail="File not found") from err
-
-        async def archive_network(project: str | None = None) -> HTMLResponse:
-            """Display agent communication network graph."""
-            # Validate project slug if provided
-            if project and not _validate_project_slug(project):
-                return await _render("error.html", message="Invalid project identifier")
-
-            settings = get_settings()
-            repo_root = await asyncio.to_thread(_expanduser_resolve_path, Path(settings.storage.root))
-            if not await asyncio.to_thread(_path_exists, repo_root / ".git"):
-                return await _render("error.html", message="Archive repository not found")
-
-            # Default to first project
-            if not project:
-                async with get_session() as session:
-                    row = (
-                        await session.execute(text("SELECT slug, human_key FROM projects ORDER BY id LIMIT 1"))
-                    ).fetchone()
-                    if row:
-                        project = row[0]
-                    else:
-                        return await _render("error.html", message="No projects found")
-
-            # Get project name
-            project_name = project
-            async with get_session() as session:
-                row = (
-                    await session.execute(text("SELECT human_key FROM projects WHERE slug = :s"), {"s": project})
-                ).fetchone()
-                if row:
-                    project_name = row[0]
-
-            repo = None
-            try:
-                repo = await asyncio.to_thread(_open_git_repo, repo_root)
-                graph = await get_agent_communication_graph(repo, project, limit=200)
-                return await _render("archive_network.html", graph=graph, project=project, project_name=project_name)
-            finally:
-                if repo is not None:
-                    await asyncio.to_thread(repo.close)
-
-        @fastapi_app.get("/mail/api/projects/{project}/agents")
-        async def api_project_agents(project: str) -> JSONResponse:
-            """Get list of agents for a project."""
-            # Validate project slug
-            if not _validate_project_slug(project):
-                raise HTTPException(status_code=400, detail="Invalid project identifier")
-
-            async with get_session() as session:
-                # Get project ID
-                proj_result = await session.execute(
-                    text("SELECT id FROM projects WHERE slug = :k OR human_key = :k"),
-                    {"k": project}
-                )
-                prow = proj_result.fetchone()
-                if not prow:
-                    raise HTTPException(status_code=404, detail="Project not found")
-
-                # Get agents for this project
-                agents_result = await session.execute(
-                    text("SELECT name FROM agents WHERE project_id = :pid ORDER BY name"),
-                    {"pid": prow[0]}
-                )
-                agents = [r[0] for r in agents_result.fetchall()]
-
-            return JSONResponse({"agents": agents})
-
-        async def archive_time_travel() -> HTMLResponse:
-            """Display time-travel interface."""
-            # Get all projects
-            async with get_session() as session:
-                rows = await session.execute(text("SELECT slug FROM projects ORDER BY human_key"))
-                projects = [r[0] for r in rows.fetchall()]
-
-            return await _render("archive_time_travel.html", projects=projects)
-
-        async def archive_time_travel_snapshot(project: str, agent: str, timestamp: str) -> JSONResponse:
-            """Get historical inbox snapshot."""
-            # Validate project slug
-            if not _validate_project_slug(project):
-                raise HTTPException(status_code=400, detail="Invalid project identifier")
-
-            # Validate agent name (alphanumeric only)
-            if not agent or not _AGENT_NAME_VALIDATOR_RE.match(agent):
-                raise HTTPException(status_code=400, detail="Invalid agent name format")
-
-            # Validate timestamp format (basic ISO 8601 check)
-            if not timestamp or not _TIMESTAMP_VALIDATOR_RE.match(timestamp):
-                raise HTTPException(status_code=400, detail="Invalid timestamp format. Use ISO 8601 format (YYYY-MM-DDTHH:MM)")
-
-            try:
-                # Get project archive
-                settings = get_settings()
-                repo = await _open_existing_project_archive(settings, project)
-                if repo is None:
-                    return JSONResponse({
-                        "messages": [],
-                        "snapshot_time": None,
-                        "commit_sha": None,
-                        "requested_time": timestamp,
-                        "error": "Project archive not found",
-                    })
-
-                try:
-                    # Get historical snapshot
-                    snapshot = await get_historical_inbox_snapshot(repo, agent, timestamp, limit=200)
-                    return JSONResponse(snapshot)
-                finally:
-                    await asyncio.to_thread(repo.repo.close)
-
-            except Exception as e:
-                # Log error but return empty result rather than failing
-                structlog.get_logger("archive").warning(
-                    "time_travel_failed",
-                    project=project,
-                    agent=agent,
-                    timestamp=timestamp,
-                    error=str(e)
-                )
-                return JSONResponse({
-                    "messages": [],
-                    "snapshot_time": None,
-                    "commit_sha": None,
-                    "requested_time": timestamp,
-                    "error": f"Unable to retrieve historical snapshot: {e!s}"
-                })
-
 
     try:
         _register_mail_ui()

@@ -517,92 +517,24 @@ async def test_concurrent_message_read_write(isolated_env):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_archive_writes(isolated_env):
-    """Test concurrent writes to the same archive."""
+async def test_concurrent_managed_projection_writes(isolated_env):
+    """Concurrent Guard projections should not initialize a Git repository."""
     settings = _config.get_settings()
 
-    from mcp_agent_mail.storage import ensure_archive, write_agent_profile
+    from mcp_agent_mail.storage import ensure_mailbox_storage, write_file_reservation_record
 
-    archive = await ensure_archive(settings, "archive-lock-test")
+    storage = await ensure_mailbox_storage(settings, "managed-lock-test")
 
-    async def write_profile(i: int) -> None:
-        """Write an agent profile."""
-        await write_agent_profile(
-            archive,
-            {
-                "name": f"Agent{i}",
-                "program": "claude-code",
-                "model": "opus-4",
-                "task_description": f"Task {i}",
-            },
-        )
+    async def write_projection(i: int) -> None:
+        await write_file_reservation_record(storage, {"id": i + 1, "agent": f"Agent{i}", "path": f"src/{i}.py"})
 
-    # Write profiles concurrently
-    tasks = [write_profile(i) for i in range(5)]
+    tasks = [write_projection(i) for i in range(5)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Should handle concurrent access
     errors = [r for r in results if isinstance(r, Exception)]
-    assert len(errors) < 3, f"Most writes should succeed: {errors}"
-
-
-@pytest.mark.asyncio
-async def test_concurrent_message_bundle_writes(isolated_env):
-    """Test concurrent message bundle writes to archive."""
-    settings = _config.get_settings()
-
-    from mcp_agent_mail.storage import ensure_archive, write_message_bundle
-
-    archive = await ensure_archive(settings, "bundle-lock-test")
-
-    async def write_bundle(i: int) -> None:
-        """Write a message bundle."""
-        await write_message_bundle(
-            archive,
-            message={"id": i, "subject": f"Subject {i}"},
-            body_md=f"Body {i}",
-            sender=f"Sender{i}",
-            recipients=[f"Recipient{i}"],
-        )
-
-    # Write bundles concurrently
-    tasks = [write_bundle(i) for i in range(10)]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Should handle concurrent access (archive lock)
-    errors = [r for r in results if isinstance(r, Exception)]
-    assert len(errors) < 5, f"Most writes should succeed: {errors}"
-
-
-@pytest.mark.asyncio
-async def test_message_bundle_commit_message_is_terse(isolated_env):
-    """Default commit messages must be terse, not Rich-rendered ASCII art (regression: #156)."""
-    settings = _config.get_settings()
-
-    from mcp_agent_mail.storage import ensure_archive, write_message_bundle
-
-    archive = await ensure_archive(settings, "commit-shape-test")
-
-    await write_message_bundle(
-        archive,
-        message={"id": 1, "subject": "Hello world", "thread_id": "t1"},
-        body_md="A message body.",
-        sender="Alice",
-        recipients=["Bob", "Carol"],
-    )
-
-    latest = next(iter(archive.repo.iter_commits()))
-    summary = latest.summary
-    body = str(latest.message)
-
-    assert summary == "mail: Alice -> Bob, Carol | Hello world", (
-        f"unexpected commit summary: {summary!r}"
-    )
-    # ASCII-art borders or panel chrome must never appear in commit messages.
-    for forbidden in ("╔", "║", "╚", "MCP TOOL CALL", "Lightning Fast"):
-        assert forbidden not in body, (
-            f"commit body leaked panel chrome ({forbidden!r}):\n{body}"
-        )
+    assert errors == []
+    assert len(list((storage.root / "file_reservations").glob("id-*.json"))) == 5
+    assert not (storage.repo_root / ".git").exists()
 
 
 # =============================================================================

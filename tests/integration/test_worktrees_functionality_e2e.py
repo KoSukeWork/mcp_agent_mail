@@ -149,7 +149,7 @@ def test_worktrees_functionality_e2e(tmp_path: Path, monkeypatch: pytest.MonkeyP
     # Now create a conflicting reservation under STORAGE_ROOT/projects/<slug>/file_reservations
     os.environ.copy()
     # Ensure the archive exists via helper
-    # We reuse the server's ensure_archive behavior in the next CLI calls; manual write is enough here.
+    # The next CLI calls use database-owned managed storage; manual setup is enough here.
     fr_dir = storage_root / "projects" / slug / "file_reservations"
     fr_dir.mkdir(parents=True, exist_ok=True)
     import datetime as _dt

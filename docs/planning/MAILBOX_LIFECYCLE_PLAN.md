@@ -158,6 +158,11 @@ legacy/Git files found no changes. The resulting ZIP passed CRC validation, cont
 excluded Git metadata, and was confirmed ignored by source control. This is a verified empty
 import, not evidence of a nonempty production migration.
 
-Retirement cleanup is still in progress: unregistered legacy implementations in CLI/HTTP/storage
-and their obsolete tests need further removal. Do not treat registration removal alone as complete
-code retirement. Full CI and the latest homepage's complete real-browser acceptance remain pending.
+Runtime retirement is complete: CLI, HTTP, MCP, workers, startup, activity, retention, messaging,
+ACK escalation, deletion, and Guard projection paths do not import or invoke Git mailbox data
+operations. The obsolete HTTP implementations and seven archive templates were removed; legacy
+profile/message Git writers were removed, and managed reservation projections no longer commit.
+Low-level historical archive readers and recovery primitives remain isolated in `storage.py` only
+for retained-fixture/forensic coverage; they are not registered, imported by runtime entry points,
+or a supported mailbox persistence API. Full CI and the latest homepage's complete real-browser
+acceptance remain pending.

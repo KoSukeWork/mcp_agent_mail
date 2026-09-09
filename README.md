@@ -46,7 +46,7 @@ Watch the full 23-minute walkthrough (https://youtu.be/68VVcqMEDrs?si=pCm6AiJAnd
 
 One disciplined hour of GPT-5 Codex—when it isn’t waiting on human prompts—often produces 10–20 “human hours” of work because the agents reason and type at machine speed. Agent Mail multiplies that advantage in two layers:
 
-1. **Base OSS server:** Git-backed mailboxes, advisory file reservations, Typer CLI helpers, and searchable archives keep independent agents aligned without babysitting. Every instruction, lease, and attachment is auditable.
+1. **Base OSS server:** SQLite-backed mailboxes, advisory file reservations, Typer CLI helpers, and database search keep independent agents aligned without babysitting. Every instruction, lease, and attachment remains auditable.
 2. **Companion stack (commercial):** The iOS app + host automation can provision, pair, and steer heterogeneous fleets (Claude Code, Codex, Gemini CLI, Factory Droid, etc.) from your phone using customizable Message Stacks, Human Overseer broadcasts, Beads awareness, and plan editing tools—no manual tmux choreography required. The automation closes the loop by scheduling prompts, honoring Limited Mode, and enforcing Double-Arm confirmations for destructive work.
 
 Result: you invest 1–2 hours of human supervision, but dozens of agent-hours execute in parallel with clear audit trails and conflict-avoidance baked in.
@@ -546,8 +546,8 @@ Agents can reply to overseer messages just like any other message, continuing th
 
 #### Technical Details
 
-- **Storage**: Overseer messages are stored identically to agent-to-agent messages (Git + SQLite)
-- **Git History**: Fully auditable; message appears in `messages/YYYY/MM/{id}.md` with commit history
+- **Storage**: Overseer messages are stored identically to agent-to-agent messages in SQLite
+- **Activity history**: Message and lifecycle activity appears in the database-backed `/mail/activity` view
 - **Thread Continuity**: Can be part of existing threads or start new ones
 - **No Authentication Bypass**: The overseer compose form still requires proper HTTP server authentication (if enabled)
 
@@ -2188,7 +2188,7 @@ This section has been removed to keep the README focused. Client code samples be
   - Local development should be zero-friction (single bearer). Production benefits from verifiable JWTs with role claims, rotating keys via JWKS, and layered RBAC.
 
 - Why SQLite FTS5 instead of an external search service?
-  - FTS5 delivers fast, relevant search with minimal ops. It’s embedded, portable, and easy to back up with the Git archive. If FTS isn’t available, we degrade to SQL LIKE automatically.
+  - FTS5 delivers fast, relevant search with minimal ops. It is embedded, portable, and included in consistent SQLite ZIP snapshots. If FTS is unavailable, we degrade to SQL LIKE automatically.
 
 - Why is LLM usage optional?
   - Summaries and discovery should enhance, not gate, core functionality. Keeping LLM usage optional controls cost and latency while allowing richer UX when enabled.
@@ -2400,9 +2400,8 @@ The project exposes a developer CLI for common operations:
 - `file_reservations active <project> [--limit N]`: list active file reservations
 - `file_reservations soon <project> [--minutes N]`: show file reservations expiring soon
 - `doctor check [PROJECT] [--verbose] [--json]`: run comprehensive diagnostics on mailbox health
-- `doctor repair [PROJECT] [--dry-run] [--yes] [--backup-dir PATH]`: semi-automatic repair with backup before changes
-- `doctor backups [--json]`: list available diagnostic backups
-- `doctor restore <backup_path> [--dry-run] [--yes]`: restore from a diagnostic backup
+- `archive import-legacy [--apply]`: validate retained originals, optionally back up and import atomically
+- `archive save|list|show|restore`: manage non-Git SQLite/storage ZIP snapshots
 
 Examples:
 
@@ -2437,17 +2436,15 @@ uv run python -m mcp_agent_mail.cli acks pending /abs/path/backend BlueLake --li
 # Run mailbox health diagnostics
 uv run python -m mcp_agent_mail.cli doctor check
 
-# Preview repairs without making changes
-uv run python -m mcp_agent_mail.cli doctor repair --dry-run
+# Validate retained legacy archives without changing them
+uv run python -m mcp_agent_mail.cli archive import-legacy
 
-# Run repairs (creates backup first, prompts for data changes)
-uv run python -m mcp_agent_mail.cli doctor repair
+# Back up, then apply a validated import
+uv run python -m mcp_agent_mail.cli archive import-legacy --apply
 
-# List available backups
-uv run python -m mcp_agent_mail.cli doctor backups
-
-# Restore from a backup
-uv run python -m mcp_agent_mail.cli doctor restore /path/to/backup --dry-run
+# List and inspect non-Git mailbox snapshots
+uv run python -m mcp_agent_mail.cli archive list
+uv run python -m mcp_agent_mail.cli archive restore /path/to/mailbox-state.zip --dry-run
 
 # WARNING: Destructive reset (clean slate)
 uv run python -m mcp_agent_mail.cli clear-and-reset-everything --force

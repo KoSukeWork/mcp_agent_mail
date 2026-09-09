@@ -25,11 +25,11 @@ from mcp_agent_mail.cli import app
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.db import ensure_schema, get_session
 from mcp_agent_mail.models import Agent, Project
-from mcp_agent_mail.storage import ensure_archive
+from mcp_agent_mail.storage import ensure_mailbox_storage
 from mcp_agent_mail.utils import slugify
 
 if TYPE_CHECKING:
-    from mcp_agent_mail.storage import ProjectArchive
+    from mcp_agent_mail.storage import MailboxStorage
 
 runner = CliRunner()
 
@@ -113,7 +113,7 @@ async def _seed_project_with_agent(
 
 
 def _write_file_reservation_json(
-    archive: "ProjectArchive",
+    archive: "MailboxStorage",
     agent_name: str,
     pattern: str,
     exclusive: bool = True,
@@ -439,7 +439,7 @@ class TestGuardCheck:
         # Compute slug from repo path and create archive
         slug = _compute_slug_for_path(repo_dir)
         settings = get_settings()
-        asyncio.run(ensure_archive(settings, slug))
+        asyncio.run(ensure_mailbox_storage(settings, slug))
 
         monkeypatch.setenv("AGENT_NAME", "TestAgent")
 
@@ -460,7 +460,7 @@ class TestGuardCheck:
         # Compute slug from repo path and create archive with reservation
         slug = _compute_slug_for_path(repo_dir)
         settings = get_settings()
-        archive = asyncio.run(ensure_archive(settings, slug))
+        archive = asyncio.run(ensure_mailbox_storage(settings, slug))
 
         # Create a file reservation for another agent
         _write_file_reservation_json(archive, "OtherAgent", "src/**", exclusive=True)
@@ -485,7 +485,7 @@ class TestGuardCheck:
         # Compute slug from repo path and create archive with reservation
         slug = _compute_slug_for_path(repo_dir)
         settings = get_settings()
-        archive = asyncio.run(ensure_archive(settings, slug))
+        archive = asyncio.run(ensure_mailbox_storage(settings, slug))
 
         # Create a file reservation for another agent
         _write_file_reservation_json(archive, "OtherAgent", "src/**", exclusive=True)
@@ -510,7 +510,7 @@ class TestGuardCheck:
         # Compute slug from repo path and create archive with reservation
         slug = _compute_slug_for_path(repo_dir)
         settings = get_settings()
-        archive = asyncio.run(ensure_archive(settings, slug))
+        archive = asyncio.run(ensure_mailbox_storage(settings, slug))
 
         # Create a file reservation for the SAME agent
         _write_file_reservation_json(archive, "TestAgent", "src/**", exclusive=True)
@@ -534,7 +534,7 @@ class TestGuardCheck:
         # Compute slug from repo path and create archive with reservation
         slug = _compute_slug_for_path(repo_dir)
         settings = get_settings()
-        archive = asyncio.run(ensure_archive(settings, slug))
+        archive = asyncio.run(ensure_mailbox_storage(settings, slug))
 
         # Create an EXPIRED file reservation
         _write_file_reservation_json(
@@ -560,7 +560,7 @@ class TestGuardCheck:
         # Compute slug from repo path and create archive with reservation
         slug = _compute_slug_for_path(repo_dir)
         settings = get_settings()
-        archive = asyncio.run(ensure_archive(settings, slug))
+        archive = asyncio.run(ensure_mailbox_storage(settings, slug))
 
         # Create a SHARED file reservation
         _write_file_reservation_json(archive, "OtherAgent", "src/**", exclusive=False)
@@ -584,7 +584,7 @@ class TestGuardCheck:
         # Compute slug from repo path and create archive with reservation
         slug = _compute_slug_for_path(repo_dir)
         settings = get_settings()
-        archive = asyncio.run(ensure_archive(settings, slug))
+        archive = asyncio.run(ensure_mailbox_storage(settings, slug))
 
         # Create a file reservation for docs/**
         _write_file_reservation_json(archive, "OtherAgent", "docs/**", exclusive=True)

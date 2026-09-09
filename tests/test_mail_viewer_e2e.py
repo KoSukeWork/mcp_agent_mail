@@ -12,7 +12,6 @@ from mcp_agent_mail import config as _config
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.db import ensure_schema, get_session
 from mcp_agent_mail.http import build_http_app
-from mcp_agent_mail.storage import ensure_archive, write_agent_profile
 
 
 async def _setup_test_data(
@@ -150,18 +149,6 @@ async def _setup_test_data(
                 {"mid": cross_project_message_id, "aid": agent_id, "kind": "to"},
             )
             await session.commit()
-
-    # Also create archive artifacts
-    archive = await ensure_archive(settings, "test-proj")
-    await write_agent_profile(
-        archive,
-        {
-            "name": "BlueLake",
-            "program": "claude-code",
-            "model": "opus-4",
-            "task_description": "Testing",
-        },
-    )
 
     return {
         "project_id": project_id,

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import cast
 
 from mcp_agent_mail.guard import render_prepush_script
-from mcp_agent_mail.storage import ProjectArchive
+from mcp_agent_mail.storage import MailboxStorage
 
 
 class _DummyArchive:
@@ -53,7 +53,7 @@ def test_prepush_blocks_on_conflict_with_real_range(tmp_path: Path) -> None:
     )
     # Render pre-push hook and run it providing pre-push stdin tuple
     hook = repo / "pre-push-test.py"
-    hook.write_text(render_prepush_script(cast(ProjectArchive, _DummyArchive(archive_root))), encoding="utf-8")
+    hook.write_text(render_prepush_script(cast(MailboxStorage, _DummyArchive(archive_root))), encoding="utf-8")
     # Determine local ref and sha; remote has no refs yet
     local_ref = "refs/heads/main"
     from contextlib import suppress
@@ -99,7 +99,7 @@ def test_prepush_warns_on_conflict_in_warn_mode(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     hook = repo / "pre-push-test.py"
-    hook.write_text(render_prepush_script(cast(ProjectArchive, _DummyArchive(archive_root))), encoding="utf-8")
+    hook.write_text(render_prepush_script(cast(MailboxStorage, _DummyArchive(archive_root))), encoding="utf-8")
     _git(repo, "branch", "-M", "main")
     local_ref = "refs/heads/main"
     local_sha = _git(repo, "rev-parse", "HEAD")
@@ -147,7 +147,7 @@ def test_prepush_fallback_matches_backslash_pattern(tmp_path: Path) -> None:
     )
 
     hook = repo / "pre-push-test.py"
-    script = render_prepush_script(cast(ProjectArchive, _DummyArchive(archive_root)))
+    script = render_prepush_script(cast(MailboxStorage, _DummyArchive(archive_root)))
     # Force fallback path (no pathspec) to exercise fnmatch normalization
     script = script.replace("if _PS and _GWM:", "if False and _GWM:")
     hook.write_text(script, encoding="utf-8")

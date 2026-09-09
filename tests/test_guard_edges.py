@@ -10,13 +10,13 @@ import pytest
 
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.guard import install_guard, install_prepush_guard, render_precommit_script, uninstall_guard
-from mcp_agent_mail.storage import ensure_archive
+from mcp_agent_mail.storage import ensure_mailbox_storage
 
 
 @pytest.mark.asyncio
 async def test_guard_render_and_conflict_message(isolated_env, tmp_path: Path):
     settings = get_settings()
-    archive = await ensure_archive(settings, "backend")
+    archive = await ensure_mailbox_storage(settings, "backend")
     script = render_precommit_script(archive)
     assert "FILE_RESERVATIONS_DIR" in script and "AGENT_NAME" in script
 

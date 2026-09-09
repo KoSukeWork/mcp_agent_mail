@@ -1206,12 +1206,9 @@ async def test_search_and_summarize_thread_respect_recipient_visibility(isolated
 
 
 @pytest.mark.asyncio
-async def test_send_message_rolls_back_db_row_when_archive_write_fails(isolated_env, monkeypatch):
-    """#180: a failed archive write after the message row is committed must roll
-    the row (and its recipients) back, not orphan a committed DB row."""
+async def test_send_message_is_database_authoritative_and_does_not_open_git(isolated_env, monkeypatch):
     from sqlalchemy import func, select as sa_select
 
-    import mcp_agent_mail.app as app_module
     from mcp_agent_mail.models import Message, MessageRecipient
 
     server = build_mcp_server()
@@ -1222,22 +1219,22 @@ async def test_send_message_rolls_back_db_row_when_archive_write_fails(isolated_
             {"project_key": "Backend", "program": "codex", "model": "gpt-5", "name": "BlueLake"},
         )
 
-        async def _boom(*_args, **_kwargs):
-            raise RuntimeError("simulated archive write failure")
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("Normal message delivery must not open the retained Git archive")
 
-        monkeypatch.setattr(app_module, "write_message_bundle", _boom)
+        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", _boom)
 
-        with pytest.raises(ToolError):
-            await client.call_tool(
-                "send_message",
-                {
-                    "project_key": "Backend",
-                    "sender_name": "BlueLake",
-                    "to": ["BlueLake"],
-                    "subject": "Plan",
-                    "body_md": "body",
-                },
-            )
+        result = await client.call_tool(
+            "send_message",
+            {
+                "project_key": "Backend",
+                "sender_name": "BlueLake",
+                "to": ["BlueLake"],
+                "subject": "Plan",
+                "body_md": "Database only",
+            },
+        )
+        assert result.data is not None
 
         async with get_session() as session:
             msg_count = (
@@ -1246,5 +1243,5 @@ async def test_send_message_rolls_back_db_row_when_archive_write_fails(isolated_
             rec_count = (
                 await session.execute(sa_select(func.count()).select_from(MessageRecipient))
             ).scalar_one()
-        assert msg_count == 0, "orphaned Message row left after archive write failure (#180)"
-        assert rec_count == 0, "orphaned MessageRecipient rows left after archive failure (#180)"
+        assert msg_count == 1
+        assert rec_count == 1

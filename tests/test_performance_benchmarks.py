@@ -1061,7 +1061,7 @@ class TestArchiveWriteLatency:
     async def test_archive_ensure_latency(self, isolated_env, benchmark_log_path: Path):
         """Benchmark archive initialization latency."""
         from mcp_agent_mail.config import get_settings
-        from mcp_agent_mail.storage import ensure_archive
+        from mcp_agent_mail.storage import ensure_mailbox_storage
 
         settings = get_settings()
         latencies: list[float] = []
@@ -1069,7 +1069,7 @@ class TestArchiveWriteLatency:
 
         for i in range(num_iterations):
             start = time.perf_counter()
-            await ensure_archive(settings, f"perf-archive-{i}")
+            await ensure_mailbox_storage(settings, f"perf-mailbox-{i}")
             elapsed_ms = (time.perf_counter() - start) * 1000
             latencies.append(elapsed_ms)
 

@@ -22,7 +22,7 @@ from mcp_agent_mail.cli import _collect_preview_status
 from mcp_agent_mail.config import clear_settings_cache, get_settings
 from mcp_agent_mail.db import ensure_schema, get_session, reset_database_state
 from mcp_agent_mail.http import build_http_app
-from mcp_agent_mail.storage import ensure_archive
+from mcp_agent_mail.storage import ensure_mailbox_storage
 from tests.e2e.utils import assert_matches_golden, make_console, render_phase, write_log
 
 INLINE_PNG_BASE64 = (
@@ -90,18 +90,19 @@ def _render_cache_stats_table(console) -> None:
     console.print(table)
 
 
-async def _measure_file_reservation_commit_delta(
+async def _measure_file_reservation_projection_delta(
     server,
     *,
     project_key: str,
     agent_name: str,
     registration_token: str | None = None,
 ) -> int:
-    """Return number of archive commits added after a file_reservation_paths call."""
+    """Return the number of managed ID projections created by a reservation call."""
     settings = get_settings()
     slug = project_key.strip("/").replace("/", "-")
-    archive = await ensure_archive(settings, slug)
-    before = list(archive.repo.iter_commits())
+    archive = await ensure_mailbox_storage(settings, slug)
+    projection_dir = archive.root / "file_reservations"
+    before = set(projection_dir.glob("id-*.json"))
     async with Client(server) as client:
         args: dict[str, Any] = {
             "project_key": project_key,
@@ -116,8 +117,9 @@ async def _measure_file_reservation_commit_delta(
         if registration_token:
             args["registration_token"] = registration_token
         await client.call_tool("file_reservation_paths", args)
-    after = list(archive.repo.iter_commits())
-    return len(after) - len(before)
+    after = set(projection_dir.glob("id-*.json"))
+    assert not (archive.repo_root / ".git").exists()
+    return len(after - before)
 
 
 def _iso_at(base: datetime, *, offset_seconds: int) -> str:
@@ -474,17 +476,17 @@ async def test_isomorphism_e2e_suite(isolated_env, tmp_path: Path, monkeypatch) 
             )
         )
         perf_agent_name = perf_agent["name"]
-        commit_delta = await _measure_file_reservation_commit_delta(
+        projection_delta = await _measure_file_reservation_projection_delta(
             server,
             project_key=perf_key,
             agent_name=perf_agent_name,
             registration_token=perf_agent.get("registration_token"),
         )
-        assert commit_delta == 1, f"Expected 1 commit, got {commit_delta}"
+        assert projection_delta == 1, f"Expected one projection, got {projection_delta}"
 
         phase2_cache_info = cache_info
         phase2_cache_ratio = cache_ratio
-        phase2_commit_delta = commit_delta
+        phase2_projection_delta = projection_delta
         phase2_project = perf_key
 
         render_phase(console, "contacts", {"from": "BlueLake", "to": "PurpleBear"})
@@ -678,7 +680,7 @@ async def test_isomorphism_e2e_suite(isolated_env, tmp_path: Path, monkeypatch) 
             },
             "commit_batching": {
                 "project": phase2_project,
-                "commit_delta": phase2_commit_delta,
+                "projection_delta": phase2_projection_delta,
             },
             "snippet_metrics": {
                 "fts": fts_summary,

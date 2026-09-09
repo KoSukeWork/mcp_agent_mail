@@ -554,12 +554,11 @@ class TestRequestLogging:
 
 
 class TestHTTPLockScope:
-    """Regression tests for DB/archive lock ordering in HTTP routes."""
+    """Regression tests that HTTP mailbox operations remain database-only."""
 
     @pytest.mark.asyncio
     async def test_overseer_send_does_not_write_git_bundles(self, isolated_env, monkeypatch):
         import mcp_agent_mail.http as http_module
-        import mcp_agent_mail.storage as storage_module
         from mcp_agent_mail.db import get_session as real_get_session
         from mcp_agent_mail.models import Agent, Project
 
@@ -582,7 +581,6 @@ class TestHTTPLockScope:
             await session.commit()
 
         session_depth = 0
-        archive_write_depths: list[int] = []
         original_get_session = http_module.get_session
 
         @contextlib.asynccontextmanager
@@ -595,12 +593,11 @@ class TestHTTPLockScope:
                 finally:
                     session_depth -= 1
 
-        async def tracking_write_message_bundle(*args: Any, **kwargs: Any):
-            archive_write_depths.append(session_depth)
-            raise AssertionError("Normal message delivery must not write legacy Git bundles")
+        def reject_git_open(*args: Any, **kwargs: Any):
+            raise AssertionError("Normal message delivery must not open the retained Git archive")
 
         monkeypatch.setattr(http_module, "get_session", tracking_get_session)
-        monkeypatch.setattr(storage_module, "write_message_bundle", tracking_write_message_bundle)
+        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", reject_git_open)
 
         settings = _config.get_settings()
         server = build_mcp_server()
@@ -618,7 +615,6 @@ class TestHTTPLockScope:
             )
 
         assert response.status_code == 200
-        assert archive_write_depths == []
         assert session_depth == 0
 
     @pytest.mark.asyncio
@@ -812,7 +808,7 @@ class TestHTTPLockScope:
         assert session_depth == 0
 
     @pytest.mark.asyncio
-    async def test_ack_escalation_profile_archives_after_db_session_closes(self, isolated_env, monkeypatch):
+    async def test_ack_escalation_holder_is_database_only(self, isolated_env, monkeypatch):
         import mcp_agent_mail.http as http_module
         from mcp_agent_mail.db import get_session as real_get_session
         from mcp_agent_mail.models import Agent, Project
@@ -838,7 +834,6 @@ class TestHTTPLockScope:
             assert agent.id is not None
 
         session_depth = 0
-        archive_write_depths: list[int] = []
         original_get_session = http_module.get_session
 
         @contextlib.asynccontextmanager
@@ -851,11 +846,11 @@ class TestHTTPLockScope:
                 finally:
                     session_depth -= 1
 
-        async def tracking_write_agent_profile(*args: Any, **kwargs: Any):
-            archive_write_depths.append(session_depth)
+        def reject_git_open(*args: Any, **kwargs: Any):
+            raise AssertionError("ACK escalation must not open the retained Git archive")
 
         monkeypatch.setattr(http_module, "get_session", tracking_get_session)
-        monkeypatch.setattr(http_module, "write_agent_profile", tracking_write_agent_profile)
+        monkeypatch.setattr("mcp_agent_mail.storage._ensure_repo", reject_git_open)
         settings = _config.get_settings()
         holder_id, holder_name = await http_module._ensure_ack_escalation_holder(
             settings=settings,
@@ -870,4 +865,4 @@ class TestHTTPLockScope:
 
         assert holder_id != agent.id
         assert holder_name == "RedStone"
-        assert archive_write_depths == [0]
+        assert session_depth == 0

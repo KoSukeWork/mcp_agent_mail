@@ -68,11 +68,8 @@ from .models import (
     WindowIdentity,
 )
 from .storage import (
-    GitIndexLockError,
-    ProjectArchive,
     archive_write_lock,
     clear_notification_signal,
-    clear_repo_cache,
     collect_lock_status,
     emit_notification_signal,
     ensure_mailbox_storage,
@@ -481,8 +478,6 @@ def _instrument_tool(
 
                     if exc.errno == errno.EMFILE and tool_name in _EMFILE_RETRY_TOOLS:
                         with suppress(Exception):
-                            clear_repo_cache()
-                        with suppress(Exception):
                             import gc
 
                             gc.collect()
@@ -591,38 +586,17 @@ def _instrument_tool(
                 )
                 error = wrapped_exc
                 raise wrapped_exc from exc
-            except GitIndexLockError as exc:
-                # Git index.lock contention (concurrent git operations)
-                # This is an expected error in multi-agent environments
-                metrics["errors"] += 1
-                _record_tool_error(tool_name, exc)
-                wrapped_exc = ToolExecutionError(
-                    "GIT_INDEX_LOCK",
-                    f"Git repository is temporarily locked by another operation. "
-                    f"This is normal in multi-agent environments. "
-                    f"Wait a moment and retry. (Attempted {exc.attempts} times before giving up)",
-                    recoverable=True,
-                    data={
-                        "tool": tool_name,
-                        "lock_path": str(exc.lock_path),
-                        "attempts": exc.attempts,
-                    },
-                )
-                error = wrapped_exc
-                raise wrapped_exc from exc
             except OSError as exc:
-                # Handle file descriptor exhaustion (EMFILE) with cache cleanup
+                # Handle file descriptor exhaustion without a Git repository cache.
                 import errno
                 metrics["errors"] += 1
                 _record_tool_error(tool_name, exc)
                 if exc.errno == errno.EMFILE:
-                    # Clear repo cache to free file handles and allow recovery
-                    cleared = clear_repo_cache()
                     wrapped_exc = ToolExecutionError(
                         "RESOURCE_EXHAUSTED",
-                        f"Too many open files. Freed {cleared} cached repos. Retry the operation.",
+                        "Too many open files. Retry after reducing concurrent file access.",
                         recoverable=True,
-                        data={"tool": tool_name, "freed_repos": cleared, "error_detail": str(exc)},
+                        data={"tool": tool_name, "error_detail": str(exc)},
                     )
                 else:
                     wrapped_exc = ToolExecutionError(
@@ -793,9 +767,7 @@ def _lifespan_factory(settings: Settings) -> Callable[[FastMCP], AsyncContextMan
                 except Exception:
                     with suppress(BaseException):
                         dispose_engine_blocking(engine)
-            with suppress(BaseException):
-                clear_repo_cache()
-            if cancelled is not None:
+        if cancelled is not None:
                 raise cancelled
 
     return lifespan
@@ -2786,13 +2758,12 @@ def _canonical_project_pair(a_id: int, b_id: int) -> tuple[int, int]:
 async def _archive_write_lock(archive: MailboxStorage, *, timeout_seconds: float = 60.0) -> AsyncIterator[None]:
     try:
         async with archive_write_lock(archive, timeout_seconds=timeout_seconds):
-            if not isinstance(archive, ProjectArchive):
-                async with get_session() as session:
-                    active = await session.scalar(select(Project.id).where(
-                        Project.slug == archive.slug, Project.mailbox_state == "active",
-                    ))
-                    if active is None:
-                        raise ToolExecutionError("MAILBOX_UNAVAILABLE", "Restore the mailbox before writing to it")
+            async with get_session() as session:
+                active = await session.scalar(select(Project.id).where(
+                    Project.slug == archive.slug, Project.mailbox_state == "active",
+                ))
+                if active is None:
+                    raise ToolExecutionError("MAILBOX_UNAVAILABLE", "Restore the mailbox before writing to it")
             yield
     except TimeoutError as exc:
         raise ToolExecutionError(

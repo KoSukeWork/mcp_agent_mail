@@ -29,7 +29,6 @@ import sys
 import threading as _threading
 import time
 import weakref
-from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -43,7 +42,6 @@ from PIL import Image
 
 from .config import Settings
 from .db import get_sqlite_pre_restore_path, get_sqlite_sidecar_paths
-from .utils import validate_thread_id_format
 
 _logger = logging.getLogger(__name__)
 _IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<path>[^)]+)\)")
@@ -1530,31 +1528,12 @@ async def _ensure_repo(root: Path, settings: Settings) -> Repo:
         return repo
 
 
-async def write_agent_profile(archive: MailboxStorage, agent: Mapping[str, object]) -> None:
-    profile_path = archive.root / "agents" / str(agent["name"]) / "profile.json"
-    await _write_json(profile_path, dict(agent))
-    rel = profile_path.relative_to(archive.repo_root).as_posix()
-    if isinstance(archive, ProjectArchive):
-        await _commit(archive.repo, archive.settings, f"agent: profile {agent['name']}", [rel])
-
-
-def _build_file_reservation_commit_message(entries: Sequence[tuple[str, str]]) -> str:
-    first_agent, first_pattern = entries[0]
-    if len(entries) == 1:
-        return f"file_reservation: {first_agent} {first_pattern}"
-    subject = f"file_reservation: {first_agent} {first_pattern} (+{len(entries) - 1} more)"
-    lines = [f"- {agent} {pattern}" for agent, pattern in entries]
-    return subject + "\n\n" + "\n".join(lines)
-
-
 async def write_file_reservation_records(
     archive: MailboxStorage,
     file_reservations: Sequence[dict[str, object]],
 ) -> None:
     if not file_reservations:
         return
-    rel_paths: list[str] = []
-    entries: list[tuple[str, str]] = []
     for file_reservation in file_reservations:
         path_pattern = str(file_reservation.get("path_pattern") or file_reservation.get("path") or "").strip()
         if not path_pattern:
@@ -1566,7 +1545,6 @@ async def write_file_reservation_records(
         # Legacy path: digest of path_pattern (kept to avoid stale artifacts in existing installs)
         legacy_path = archive.root / "file_reservations" / f"{digest}.json"
         await _write_json(legacy_path, normalized_file_reservation)
-        rel_paths.append(legacy_path.relative_to(archive.repo_root).as_posix())
 
         # Stable per-reservation artifact to avoid collisions across shared reservations
         reservation_id = normalized_file_reservation.get("id")
@@ -1574,213 +1552,10 @@ async def write_file_reservation_records(
         if id_token.isdigit():
             id_path = archive.root / "file_reservations" / f"id-{id_token}.json"
             await _write_json(id_path, normalized_file_reservation)
-            rel_paths.append(id_path.relative_to(archive.repo_root).as_posix())
-        agent_name = str(normalized_file_reservation.get("agent", "unknown"))
-        entries.append((agent_name, path_pattern))
-    commit_message = _build_file_reservation_commit_message(entries)
-    if isinstance(archive, ProjectArchive):
-        await _commit(archive.repo, archive.settings, commit_message, rel_paths)
 
 
 async def write_file_reservation_record(archive: MailboxStorage, file_reservation: dict[str, object]) -> None:
     await write_file_reservation_records(archive, [file_reservation])
-
-
-async def write_message_bundle(
-    archive: ProjectArchive,
-    message: dict[str, object],
-    body_md: str,
-    sender: str,
-    recipients: Sequence[str],
-    extra_paths: Sequence[str] | None = None,
-    commit_text: str | None = None,
-    sender_outbox_name: str | None = None,
-) -> None:
-    timestamp_obj: Any = message.get("created") or message.get("created_ts")
-    now: datetime
-    timestamp_str: str  # Always define to avoid UnboundLocalError
-    if isinstance(timestamp_obj, datetime):
-        now = timestamp_obj
-        timestamp_str = now.isoformat()
-    elif isinstance(timestamp_obj, str) and timestamp_obj.strip():
-        timestamp_str = timestamp_obj.strip()
-        # Handle Z-suffixed timestamps (ISO 8601 UTC indicator)
-        parse_str = timestamp_str
-        if parse_str.endswith("Z"):
-            parse_str = parse_str[:-1] + "+00:00"
-        try:
-            now = datetime.fromisoformat(parse_str)
-        except ValueError:
-            now = datetime.now(timezone.utc)
-            timestamp_str = now.isoformat()
-    else:
-        now = datetime.now(timezone.utc)
-        timestamp_str = now.isoformat()
-
-    if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
-        # Treat naive timestamps as UTC (matches SQLite naive-UTC convention)
-        now = now.replace(tzinfo=timezone.utc)
-    y_dir = now.strftime("%Y")
-    m_dir = now.strftime("%m")
-
-    canonical_dir = archive.root / "messages" / y_dir / m_dir
-    outbox_dir = (
-        archive.root / "agents" / sender_outbox_name / "outbox" / y_dir / m_dir
-        if sender_outbox_name
-        else None
-    )
-    inbox_dirs = [(r, archive.root / "agents" / r / "inbox" / y_dir / m_dir) for r in recipients]
-
-    rel_paths: list[str] = []
-
-    await _to_thread(canonical_dir.mkdir, parents=True, exist_ok=True)
-    if outbox_dir is not None:
-        await _to_thread(outbox_dir.mkdir, parents=True, exist_ok=True)
-    for _r, path in inbox_dirs:
-        await _to_thread(path.mkdir, parents=True, exist_ok=True)
-
-    # BCC privacy (issue #186): the full bcc list is only ever visible to the
-    # sender. Canonical/outbox copies are the sender's own record and keep the
-    # full frontmatter; per-recipient inbox copies must redact bcc so that a
-    # to/cc recipient cannot see who was blind-copied, and a bcc recipient only
-    # ever sees their own name (never the other blind copies).
-    bcc_list = message.get("bcc")
-    bcc_names = {str(name) for name in bcc_list} if isinstance(bcc_list, (list, tuple)) else set()
-
-    def _render_content(viewer: str | None) -> str:
-        if viewer is None or not bcc_names:
-            view_message = message
-        else:
-            view_message = dict(message)
-            view_message["bcc"] = [viewer] if viewer in bcc_names else []
-        frontmatter = json.dumps(view_message, indent=2, sort_keys=True)
-        return f"---json\n{frontmatter}\n---\n\n{body_md.strip()}\n"
-
-    # Sender-side copies (canonical archive + sender outbox) retain full bcc.
-    content = _render_content(None)
-
-    # Descriptive, ISO-prefixed filename: <ISO>__<subject-slug>__<id>.md
-    created_iso = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    subject_value = str(message.get("subject", "")).strip() or "message"
-    subject_slug = _SUBJECT_SLUG_RE.sub("-", subject_value).strip("-_").lower()[:80] or "message"
-    id_suffix = str(message.get("id", ""))
-    filename = (
-        f"{created_iso}__{subject_slug}__{id_suffix}.md"
-        if id_suffix
-        else f"{created_iso}__{subject_slug}.md"
-    )
-    canonical_path = canonical_dir / filename
-    await _write_text(canonical_path, content)
-    rel_paths.append(canonical_path.relative_to(archive.repo_root).as_posix())
-
-    if outbox_dir is not None:
-        outbox_path = outbox_dir / filename
-        await _write_text(outbox_path, content)
-        rel_paths.append(outbox_path.relative_to(archive.repo_root).as_posix())
-
-    for recipient_name, inbox_dir in inbox_dirs:
-        inbox_path = inbox_dir / filename
-        await _write_text(inbox_path, _render_content(recipient_name))
-        rel_paths.append(inbox_path.relative_to(archive.repo_root).as_posix())
-
-    # Update thread-level digest for human review if thread_id present
-    thread_id_obj = message.get("thread_id")
-    if isinstance(thread_id_obj, str) and thread_id_obj.strip():
-        canonical_rel = canonical_path.relative_to(archive.repo_root).as_posix()
-        digest_rel = await _update_thread_digest(
-            archive,
-            thread_id_obj.strip(),
-            {
-                "from": sender,
-                # Exclude bcc recipients (#186): the thread digest is a shared
-                # file (messages/threads/<id>.md) readable by every thread
-                # participant, so it must not reveal who was blind-copied.
-                "to": [r for r in recipients if r not in bcc_names],
-                "subject": message.get("subject", "") or "",
-                "created": timestamp_str,
-            },
-            body_md,
-            canonical_rel,
-        )
-        if digest_rel:
-            rel_paths.append(digest_rel)
-
-    if extra_paths:
-        rel_paths.extend(extra_paths)
-    thread_key = message.get("thread_id") or message.get("id")
-    if commit_text:
-        commit_message = commit_text if commit_text.endswith("\n") else f"{commit_text}\n"
-    else:
-        commit_subject = f"mail: {sender} -> {', '.join(recipients)} | {message.get('subject', '')}"
-        # Enriched commit body mirroring console logs
-        commit_body_lines = [
-            "TOOL: send_message",
-            f"Agent: {sender}",
-            f"Project: {message.get('project', '')}",
-            f"Started: {timestamp_str}",
-            "Status: SUCCESS",
-            f"Thread: {thread_key}",
-        ]
-        commit_message = commit_subject + "\n\n" + "\n".join(commit_body_lines) + "\n"
-    await _commit(archive.repo, archive.settings, commit_message, rel_paths)
-
-
-async def _update_thread_digest(
-    archive: ProjectArchive,
-    thread_id: str,
-    meta: dict[str, object],
-    body_md: str,
-    canonical_rel_path: str,
-) -> str | None:
-    """
-    Append a compact entry to a thread-level digest file for human review.
-
-    The digest lives at messages/threads/{thread_id}.md and contains an
-    append-only sequence of sections linking to canonical messages.
-    """
-    if not validate_thread_id_format(thread_id):
-        raise ValueError(
-            "Invalid thread_id: must start with an alphanumeric character and contain only "
-            "letters, numbers, '.', '_', or '-' (max 128)."
-        )
-    digest_dir = archive.root / "messages" / "threads"
-    await _to_thread(digest_dir.mkdir, parents=True, exist_ok=True)
-    digest_path = digest_dir / f"{thread_id}.md"
-
-    # Ensure recipients list is typed as list[str] for join()
-    to_value = meta.get("to")
-    if isinstance(to_value, (list, tuple)):
-        recipients_list: list[str] = [str(v) for v in to_value]
-    elif isinstance(to_value, str):
-        recipients_list = [to_value]
-    else:
-        recipients_list = []
-    header = (
-        f"## {meta.get('created', '')} — {meta.get('from', '')} → {', '.join(recipients_list)}\n\n"
-    )
-    link_line = f"[View canonical]({canonical_rel_path})\n\n"
-    subject = str(meta.get("subject", "")).strip()
-    subject_line = f"### {subject}\n\n" if subject else ""
-
-    # Truncate body to a preview to keep digest readable
-    preview = body_md.strip()
-    if len(preview) > 1200:
-        preview = preview[:1200].rstrip() + "\n..."
-
-    entry = subject_line + header + link_line + preview + "\n\n---\n\n"
-
-    # Append atomically
-    def _append() -> None:
-        mode = "a" if digest_path.exists() else "w"
-        with digest_path.open(mode, encoding="utf-8") as f:
-            if mode == "w":
-                f.write(f"# Thread {thread_id}\n\n")
-            f.write(entry)
-
-    lock_path = digest_path.with_suffix(f"{digest_path.suffix}.lock")
-    async with AsyncFileLock(lock_path):
-        await _to_thread(_append)
-    return digest_path.relative_to(archive.repo_root).as_posix()
 
 
 def _resolve_archive_relative_path(archive: MailboxStorage, raw_path: str) -> Path:

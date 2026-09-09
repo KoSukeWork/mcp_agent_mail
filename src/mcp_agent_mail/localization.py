@@ -526,6 +526,7 @@ _ZH_CN: dict[str, str] = {
     "Reservations are": "预留是",
     "signals": "协作信号",
     "Agents can still edit files, but they'll see warnings if conflicts exist.": "智能体仍然可以编辑文件，但发生冲突时会收到警告。",
+    "Install the source-repository Guard with": "使用以下命令安装源码仓库 Guard：",
     "ID": "ID",
     "Path Pattern": "路径模式",
     "Exclusive": "独占",

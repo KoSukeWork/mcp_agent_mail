@@ -16,7 +16,7 @@ Test Cases:
 11. Renew reservation extends TTL
 
 Verification:
-- Git archive artifacts created (file_reservations/*.json)
+- Managed Guard projections created (mailboxes/<slug>/file_reservations/*.json)
 - Conflicts returned with holder information
 - Released reservations have released_ts set
 
@@ -26,6 +26,7 @@ Reference: mcp_agent_mail-aew
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -35,7 +36,7 @@ from sqlalchemy import text
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.config import get_settings
 from mcp_agent_mail.db import get_session
-from mcp_agent_mail.storage import ensure_archive
+from mcp_agent_mail.storage import ensure_mailbox_storage
 
 # ============================================================================
 # Helper: Direct SQL verification
@@ -204,8 +205,7 @@ async def test_create_shared_reservation(isolated_env):
 
 
 @pytest.mark.asyncio
-async def test_file_reservation_paths_batches_commits(isolated_env):
-    """file_reservation_paths should emit a single commit per tool call."""
+async def test_file_reservation_paths_writes_managed_projections_without_git(isolated_env):
     server = build_mcp_server()
     async with Client(server) as client:
         project_key = "/test/res/batch-commits"
@@ -217,8 +217,9 @@ async def test_file_reservation_paths_batches_commits(isolated_env):
         )
 
         settings = get_settings()
-        archive = await ensure_archive(settings, slug)
-        initial_commits = list(archive.repo.iter_commits())
+        archive = await ensure_mailbox_storage(settings, slug)
+        projection_dir = archive.root / "file_reservations"
+        initial_projections = set(projection_dir.glob("id-*.json"))
 
         result = await client.call_tool(
             "file_reservation_paths",
@@ -228,20 +229,19 @@ async def test_file_reservation_paths_batches_commits(isolated_env):
                 "paths": ["src/a.py", "src/b.py"],
                 "ttl_seconds": 3600,
                 "exclusive": True,
-                "reason": "Batch commit test",
+                "reason": "Managed projection test",
             },
         )
         assert len(result.data.get("granted", [])) == 2
 
-        after_commits = list(archive.repo.iter_commits())
-        assert len(after_commits) - len(initial_commits) == 1
-
-        latest_message = after_commits[0].message
-        latest_text = latest_message.decode() if isinstance(latest_message, bytes) else str(latest_message)
-        subject = latest_text.splitlines()[0]
-        assert subject.startswith("file_reservation: ")
-        assert "src/a.py" in latest_text
-        assert "src/b.py" in latest_text
+        new_projections = set(projection_dir.glob("id-*.json")) - initial_projections
+        assert len(new_projections) == 2
+        projected_patterns = {
+            json.loads(path.read_text(encoding="utf-8"))["path_pattern"]
+            for path in new_projections
+        }
+        assert projected_patterns == {"src/a.py", "src/b.py"}
+        assert not (archive.repo_root / ".git").exists()
 
 
 # ============================================================================

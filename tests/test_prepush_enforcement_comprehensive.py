@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import cast
 
 from mcp_agent_mail.guard import render_prepush_script
-from mcp_agent_mail.storage import ProjectArchive
+from mcp_agent_mail.storage import MailboxStorage
 
 
 class _DummyArchive:
@@ -127,7 +127,7 @@ def _run_prepush_hook(
 ) -> subprocess.CompletedProcess:
     """Run the pre-push hook script with the given configuration."""
     hook = repo / "pre-push-test.py"
-    script = render_prepush_script(cast(ProjectArchive, _DummyArchive(archive_root)))
+    script = render_prepush_script(cast(MailboxStorage, _DummyArchive(archive_root)))
     hook.write_text(script, encoding="utf-8")
 
     env = os.environ.copy()
