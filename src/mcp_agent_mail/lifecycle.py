@@ -396,8 +396,17 @@ async def purge_mailbox(settings: Settings, project_id: int, *, now: datetime | 
                 links.c.a_project_id == project_id, links.c.b_project_id == project_id,
             )))
             await session.execute(update(messages).where(messages.c.reply_to.in_(message_ids)).values(reply_to=None))
-            for name in ("file_reservations", "messages", "agents", "window_identities",
-                         "message_summaries", "product_project_links", "mailbox_events"):
+            for name in (
+                "identity_confirmation_requests",
+                "agent_conversation_bindings",
+                "file_reservations",
+                "messages",
+                "agents",
+                "window_identities",
+                "message_summaries",
+                "product_project_links",
+                "mailbox_events",
+            ):
                 table = tables[name]
                 await session.execute(delete(table).where(table.c.project_id == project_id))
             siblings = tables["project_sibling_suggestions"]

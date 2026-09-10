@@ -758,6 +758,7 @@ async def ensure_schema(settings: Settings | None = None) -> None:
             # (WAL mode is set automatically via event listener in _build_engine)
             await conn.run_sync(SQLModel.metadata.create_all)
             await conn.run_sync(_migrate_sqlite_project_lifecycle)
+            await conn.run_sync(_migrate_sqlite_agent_identity)
             # Setup FTS and custom indexes
             await conn.run_sync(_setup_fts)
             await conn.run_sync(_setup_mailbox_lifecycle)
@@ -795,11 +796,35 @@ def _migrate_sqlite_project_lifecycle(connection: Connection) -> None:
     )
 
 
+def _migrate_sqlite_agent_identity(connection: Connection) -> None:
+    """Add Agent binding and service-credential metadata without exposing secrets."""
+    if connection.dialect.name != "sqlite":
+        return
+    columns = {column["name"] for column in inspect(connection).get_columns("agents")}
+    definitions = {
+        "binding_generation": "INTEGER NOT NULL DEFAULT 1 CHECK (binding_generation >= 1)",
+        "service_credential_hash": "VARCHAR(64) DEFAULT NULL",
+        "service_credential_version": "INTEGER NOT NULL DEFAULT 0 CHECK (service_credential_version >= 0)",
+        "service_credential_rotated_at": "DATETIME DEFAULT NULL",
+    }
+    for name, ddl in definitions.items():
+        if name not in columns:
+            connection.exec_driver_sql(f"ALTER TABLE agents ADD COLUMN {name} {ddl}")
+
+
 def _setup_mailbox_lifecycle(connection: Connection) -> None:
     """Fence in-flight inserts and keep real message activity in the same transaction."""
     if connection.dialect.name != "sqlite":
         return
-    for table in ("agents", "messages", "file_reservations", "window_identities", "message_summaries"):
+    for table in (
+        "agents",
+        "messages",
+        "file_reservations",
+        "window_identities",
+        "message_summaries",
+        "agent_conversation_bindings",
+        "identity_confirmation_requests",
+    ):
         connection.exec_driver_sql(
             f"CREATE TRIGGER IF NOT EXISTS mailbox_active_{table} BEFORE INSERT ON {table} "
             "WHEN COALESCE((SELECT mailbox_state FROM projects WHERE id = NEW.project_id), '') != 'active' "

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import CheckConstraint, Column, Index, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, Index, UniqueConstraint, text
 from sqlalchemy.types import JSON
 from sqlmodel import Field, SQLModel
 
@@ -108,6 +108,10 @@ class Agent(SQLModel, table=True):
     attachments_policy: str = Field(default="auto", max_length=16)
     contact_policy: str = Field(default="auto", max_length=16)  # open | auto | contacts_only | block_all
     registration_token: Optional[str] = Field(default=None, max_length=64, index=True)
+    binding_generation: int = Field(default=1, ge=1, sa_column_kwargs={"server_default": "1"})
+    service_credential_hash: Optional[str] = Field(default=None, max_length=64)
+    service_credential_version: int = Field(default=0, ge=0, sa_column_kwargs={"server_default": "0"})
+    service_credential_rotated_at: Optional[datetime] = Field(default=None)
     retired_at: Optional[datetime] = Field(default=None)
 
 
@@ -217,6 +221,104 @@ class WindowIdentity(SQLModel, table=True):
     created_ts: datetime = Field(default_factory=_utcnow_naive)
     last_active_ts: datetime = Field(default_factory=_utcnow_naive)
     expires_ts: Optional[datetime] = Field(default=None)
+
+
+class McpClientPrincipal(SQLModel, table=True):
+    """Authenticated MCP client installation, OAuth subject, or service principal."""
+
+    __tablename__ = "mcp_client_principals"
+    __table_args__ = (
+        CheckConstraint("principal_type IN ('oauth', 'local_key', 'service')", name="ck_mcp_principal_type"),
+        CheckConstraint("status IN ('active', 'revoked')", name="ck_mcp_principal_status"),
+        UniqueConstraint("client_uid", name="uq_mcp_client_principal_uid"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    client_uid: str = Field(max_length=128, index=True)
+    principal_type: str = Field(default="local_key", max_length=16, sa_column_kwargs={"server_default": "local_key"})
+    credential_hash: Optional[str] = Field(default=None, max_length=64)
+    issuer: Optional[str] = Field(default=None, max_length=1024)
+    subject_hash: Optional[str] = Field(default=None, max_length=64)
+    oauth_client_id_hash: Optional[str] = Field(default=None, max_length=64)
+    public_key: Optional[str] = Field(default=None, max_length=4096)
+    public_key_fingerprint: Optional[str] = Field(default=None, max_length=128)
+    display_label: str = Field(default="", max_length=128)
+    scopes: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False, server_default="[]"))
+    status: str = Field(default="active", max_length=16, sa_column_kwargs={"server_default": "active"})
+    created_at: datetime = Field(default_factory=_utcnow_naive)
+    last_authenticated_at: datetime = Field(default_factory=_utcnow_naive)
+    revoked_at: Optional[datetime] = Field(default=None)
+    revocation_reason: Optional[str] = Field(default=None, max_length=2048)
+
+
+class AgentConversationBinding(SQLModel, table=True):
+    """Durable mapping from a trusted MCP conversation to one Agent identity."""
+
+    __tablename__ = "agent_conversation_bindings"
+    __table_args__ = (
+        CheckConstraint("generation >= 1", name="ck_agent_binding_generation"),
+        CheckConstraint("status IN ('active', 'revoked')", name="ck_agent_binding_status"),
+        UniqueConstraint(
+            "client_principal_id",
+            "project_id",
+            "conversation_binding_hash",
+            name="uq_agent_binding_conversation",
+        ),
+        Index(
+            "uq_agent_binding_active_owner",
+            "project_id",
+            "agent_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index("idx_agent_binding_principal_project", "client_principal_id", "project_id"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="projects.id", index=True)
+    agent_id: int = Field(foreign_key="agents.id", index=True)
+    client_principal_id: int = Field(foreign_key="mcp_client_principals.id", index=True)
+    conversation_binding_hash: str = Field(max_length=64, index=True)
+    generation: int = Field(default=1, ge=1, sa_column_kwargs={"server_default": "1"})
+    status: str = Field(default="active", max_length=16, sa_column_kwargs={"server_default": "active"})
+    created_at: datetime = Field(default_factory=_utcnow_naive)
+    last_seen_at: datetime = Field(default_factory=_utcnow_naive)
+    revoked_at: Optional[datetime] = Field(default=None)
+    revocation_reason: Optional[str] = Field(default=None, max_length=2048)
+    transferred_from_binding_id: Optional[int] = Field(default=None, foreign_key="agent_conversation_bindings.id")
+
+
+class IdentityConfirmationRequest(SQLModel, table=True):
+    """Short-lived, single-use approval request for identity-sensitive operations."""
+
+    __tablename__ = "identity_confirmation_requests"
+    __table_args__ = (
+        CheckConstraint("action IN ('transfer', 'recover', 'revoke', 'rotate')", name="ck_identity_confirmation_action"),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'denied', 'expired', 'consumed')",
+            name="ck_identity_confirmation_status",
+        ),
+        CheckConstraint("expected_binding_generation >= 1", name="ck_identity_confirmation_generation"),
+        UniqueConstraint("request_uid", name="uq_identity_confirmation_request_uid"),
+        Index("idx_identity_confirmation_project_status", "project_id", "status", "expires_at"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    request_uid: str = Field(max_length=64, index=True)
+    action: str = Field(max_length=16)
+    requesting_principal_id: int = Field(foreign_key="mcp_client_principals.id", index=True)
+    project_id: int = Field(foreign_key="projects.id", index=True)
+    agent_id: int = Field(foreign_key="agents.id", index=True)
+    source_binding_id: Optional[int] = Field(default=None, foreign_key="agent_conversation_bindings.id")
+    target_conversation_binding_hash: str = Field(max_length=64)
+    expected_binding_generation: int = Field(ge=1)
+    challenge_hash: str = Field(max_length=64)
+    status: str = Field(default="pending", max_length=16, sa_column_kwargs={"server_default": "pending"})
+    created_at: datetime = Field(default_factory=_utcnow_naive)
+    expires_at: datetime
+    decided_at: Optional[datetime] = Field(default=None)
+    decided_by_principal_id: Optional[int] = Field(default=None, foreign_key="mcp_client_principals.id")
 
 
 class MessageSummary(SQLModel, table=True):

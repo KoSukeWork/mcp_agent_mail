@@ -11,6 +11,7 @@ import importlib
 import json
 import logging
 import re
+import secrets
 from collections.abc import MutableMapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,6 +43,7 @@ from .app import (
 )
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
+from .identity import ConversationIdentityError, decide_identity_transfer, get_identity_confirmation
 from .localization import (
     INTERFACE_LOCALE_COOKIE,
     get_interface_locale,
@@ -515,6 +517,8 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if request.url.path.startswith("/health/") or request.url.path == "/api/health":
             return await call_next(request)
+        if request.url.path.startswith(("/identity/confirm/", "/api/identity/confirm/")):
+            return await call_next(request)
         if _localhost_bypass_allowed(
             request,
             allow_localhost=self._allow_localhost,
@@ -746,7 +750,12 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
                 self._last_cleanup = now
 
         # Allow CORS preflight and health endpoints
-        if request.method == "OPTIONS" or request.url.path.startswith("/health/") or request.url.path == "/api/health":
+        if (
+            request.method == "OPTIONS"
+            or request.url.path.startswith("/health/")
+            or request.url.path == "/api/health"
+            or request.url.path.startswith(("/identity/confirm/", "/api/identity/confirm/"))
+        ):
             return await call_next(request)
 
         # Only read/patch body for POST requests. GET (including SSE) must not receive http.request messages.
@@ -1460,6 +1469,198 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             allow_methods=settings.cors.allow_methods or ["*"],
             allow_headers=settings.cors.allow_headers or ["*"],
         )
+
+    def _identity_confirmation_origin_is_valid(request: Request) -> bool:
+        origin = request.headers.get("origin", "")
+        expected = f"{request.url.scheme}://{request.url.netloc}"
+        return bool(origin) and hmac.compare_digest(origin.rstrip("/"), expected.rstrip("/"))
+
+    async def _identity_confirmation_challenge(request: Request) -> str:
+        if not _identity_confirmation_origin_is_valid(request):
+            raise HTTPException(status_code=403, detail="Invalid confirmation origin")
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="Expected a JSON object") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Expected a JSON object")
+        challenge = payload.get("challenge")
+        if not isinstance(challenge, str) or not (32 <= len(challenge) <= 256):
+            raise HTTPException(status_code=400, detail="Invalid confirmation challenge")
+        return challenge
+
+    def _identity_confirmation_error(exc: ConversationIdentityError) -> JSONResponse:
+        status_code = 409 if exc.error_type in {"MAILBOX_UNAVAILABLE", "IDENTITY_SESSION_REVOKED"} else 404
+        return JSONResponse(
+            {"error": exc.error_type, "message": str(exc)},
+            status_code=status_code,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @fastapi_app.get("/identity/confirm/{request_uid}", response_class=HTMLResponse)
+    async def identity_confirmation_page(request_uid: str) -> HTMLResponse:
+        nonce = secrets.token_urlsafe(18)
+        request_json = json.dumps(request_uid)
+        page = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent identity confirmation</title>
+  <style nonce="{nonce}">
+    :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #e2e8f0; }}
+    main {{ width: min(42rem, calc(100vw - 2rem)); padding: 1.5rem; border: 1px solid #334155; border-radius: 1rem; background: #111827; box-shadow: 0 1rem 3rem #0008; }}
+    h1 {{ margin-top: 0; font-size: 1.4rem; }}
+    dl {{ display: grid; grid-template-columns: 9rem 1fr; gap: .65rem; }}
+    dt {{ color: #94a3b8; }} dd {{ margin: 0; overflow-wrap: anywhere; }}
+    .warning {{ padding: .8rem; border-radius: .6rem; background: #7f1d1d; color: #fee2e2; }}
+    .actions {{ display: flex; gap: .75rem; margin-top: 1.25rem; }}
+    button {{ flex: 1; border: 0; border-radius: .55rem; padding: .75rem 1rem; font-weight: 700; cursor: pointer; }}
+    #approve {{ background: #22c55e; color: #052e16; }} #deny {{ background: #475569; color: white; }}
+    button:disabled {{ opacity: .5; cursor: wait; }} #status {{ min-height: 1.5rem; color: #cbd5e1; }}
+  </style>
+</head>
+<body>
+<main>
+  <h1 id="title">Agent identity confirmation</h1>
+  <p id="intro">Review this identity transfer before approving it.</p>
+  <div id="loading">Loading protected request details…</div>
+  <section id="details" hidden>
+    <dl>
+      <dt id="project-label">Mailbox</dt><dd id="project"></dd>
+      <dt>Agent</dt><dd id="agent"></dd>
+      <dt id="client-label">MCP client</dt><dd id="client"></dd>
+      <dt id="expires-label">Expires</dt><dd id="expires"></dd>
+    </dl>
+    <p class="warning" id="warning">Approval immediately revokes the previously bound conversation.</p>
+    <div class="actions">
+      <button id="deny" type="button">Deny</button>
+      <button id="approve" type="button">Approve transfer</button>
+    </div>
+  </section>
+  <p id="status" role="status" aria-live="polite"></p>
+</main>
+<script nonce="{nonce}">
+(() => {{
+  'use strict';
+  const requestId = {request_json};
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const challenge = fragment.get('challenge') || '';
+  history.replaceState(null, '', location.pathname);
+  const zh = (navigator.language || '').toLowerCase().startsWith('zh');
+  const text = zh ? {{
+    title: '智能体身份确认', intro: '批准前请核对此次身份接管。', loading: '正在加载受保护的请求详情…',
+    mailbox: '邮箱', client: 'MCP 客户端', expires: '过期时间',
+    warning: '批准后, 之前绑定的对话会立即失去该智能体身份。', deny: '拒绝', approve: '批准接管',
+    invalid: '确认链接无效或已经过期。', approved: '身份接管已完成。你可以关闭此窗口。',
+    denied: '已拒绝身份接管。你可以关闭此窗口。', failed: '操作失败。'
+  }} : {{
+    title: 'Agent identity confirmation', intro: 'Review this identity transfer before approving it.',
+    loading: 'Loading protected request details…', mailbox: 'Mailbox', client: 'MCP client', expires: 'Expires',
+    warning: 'Approval immediately revokes the previously bound conversation.', deny: 'Deny',
+    approve: 'Approve transfer', invalid: 'This confirmation link is invalid or expired.',
+    approved: 'Identity transfer completed. You may close this window.',
+    denied: 'Identity transfer denied. You may close this window.', failed: 'The operation failed.'
+  }};
+  for (const [id, key] of [['title','title'],['intro','intro'],['loading','loading'],['project-label','mailbox'],
+    ['client-label','client'],['expires-label','expires'],['warning','warning'],['deny','deny'],['approve','approve']]) {{
+    document.getElementById(id).textContent = text[key];
+  }}
+  const post = async (suffix) => {{
+    const response = await fetch(`/api/identity/confirm/${{encodeURIComponent(requestId)}}/${{suffix}}`, {{
+      method: 'POST', headers: {{'Content-Type': 'application/json'}}, credentials: 'same-origin',
+      body: JSON.stringify({{challenge}})
+    }});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || data.detail || text.failed);
+    return data;
+  }};
+  const finish = async (decision) => {{
+    document.getElementById('approve').disabled = true;
+    document.getElementById('deny').disabled = true;
+    try {{
+      await post(decision);
+      document.getElementById('details').hidden = true;
+      document.getElementById('status').textContent = decision === 'approve' ? text.approved : text.denied;
+    }} catch (error) {{ document.getElementById('status').textContent = error.message || text.failed; }}
+  }};
+  document.getElementById('approve').addEventListener('click', () => finish('approve'));
+  document.getElementById('deny').addEventListener('click', () => finish('deny'));
+  post('details').then((data) => {{
+    document.getElementById('loading').hidden = true;
+    document.getElementById('project').textContent = data.project;
+    document.getElementById('agent').textContent = data.agent_name;
+    document.getElementById('client').textContent = data.client_label;
+    document.getElementById('expires').textContent = data.expires_at;
+    document.getElementById('details').hidden = false;
+  }}).catch(() => {{ document.getElementById('loading').textContent = text.invalid; }});
+}})();
+</script>
+</body>
+</html>"""
+        return HTMLResponse(
+            page,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Content-Security-Policy": (
+                    "default-src 'none'; "
+                    f"script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; "
+                    "connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+                ),
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @fastapi_app.post("/api/identity/confirm/{request_uid}/details")
+    async def identity_confirmation_details(request_uid: str, request: Request) -> JSONResponse:
+        challenge = await _identity_confirmation_challenge(request)
+        try:
+            confirmation, project, agent, principal = await get_identity_confirmation(request_uid, challenge)
+        except ConversationIdentityError as exc:
+            return _identity_confirmation_error(exc)
+        return JSONResponse(
+            {
+                "request_id": confirmation.request_uid,
+                "action": confirmation.action,
+                "project": project.human_key,
+                "mailbox_type": project.mailbox_type,
+                "mailbox_state": project.mailbox_state,
+                "agent_name": agent.name,
+                "client_label": principal.display_label,
+                "binding_generation": confirmation.expected_binding_generation,
+                "expires_at": confirmation.expires_at.replace(tzinfo=timezone.utc).isoformat(),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @fastapi_app.post("/api/identity/confirm/{request_uid}/approve")
+    async def approve_identity_confirmation(request_uid: str, request: Request) -> JSONResponse:
+        challenge = await _identity_confirmation_challenge(request)
+        try:
+            resolved = await decide_identity_transfer(request_uid, challenge, approve=True)
+        except ConversationIdentityError as exc:
+            return _identity_confirmation_error(exc)
+        if resolved is None:  # pragma: no cover - approve=True always returns a binding or raises
+            return JSONResponse({"error": "IDENTITY_BINDING_CONFLICT"}, status_code=409)
+        return JSONResponse(
+            {
+                "status": "transferred",
+                "agent_name": resolved.agent.name,
+                "binding_generation": resolved.binding.generation,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @fastapi_app.post("/api/identity/confirm/{request_uid}/deny")
+    async def deny_identity_confirmation(request_uid: str, request: Request) -> JSONResponse:
+        challenge = await _identity_confirmation_challenge(request)
+        try:
+            await decide_identity_transfer(request_uid, challenge, approve=False)
+        except ConversationIdentityError as exc:
+            return _identity_confirmation_error(exc)
+        return JSONResponse({"status": "denied"}, headers={"Cache-Control": "no-store"})
 
     # Health endpoints
     @fastapi_app.get("/health/liveness")

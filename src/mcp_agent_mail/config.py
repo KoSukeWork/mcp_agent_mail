@@ -271,6 +271,10 @@ class Settings:
     window_identity_uuid: str
     # Days of inactivity before a window identity expires (default 30)
     window_identity_ttl_days: int
+    # Browser confirmation fallback for clients without native MCP elicitation UI.
+    identity_browser_confirmation_enabled: bool
+    identity_confirmation_base_url: str
+    identity_confirmation_ttl_seconds: int
     # Max age (seconds) of an MCP-session-keyed binding entry before it is
     # GC'd from the in-memory binding tables. Bindings are pruned lazily on
     # access; this controls how long an inactive HTTP/stdio session is
@@ -596,6 +600,12 @@ def _build_settings() -> Settings:
         messaging_auto_handshake_on_block=_b("MESSAGING_AUTO_HANDSHAKE_ON_BLOCK", default=True),
         window_identity_uuid=decouple_config("MCP_AGENT_MAIL_WINDOW_ID", default="").strip(),
         window_identity_ttl_days=_i("MCP_AGENT_MAIL_WINDOW_TTL_DAYS", default=30),
+        identity_browser_confirmation_enabled=_b("IDENTITY_BROWSER_CONFIRMATION_ENABLED", default=True),
+        identity_confirmation_base_url=decouple_config(
+            "IDENTITY_CONFIRMATION_BASE_URL",
+            default=f"http://127.0.0.1:{http_settings.port}",
+        ).strip().rstrip("/"),
+        identity_confirmation_ttl_seconds=_i("IDENTITY_CONFIRMATION_TTL_SECONDS", default=300),
         session_binding_ttl_seconds=_i("MCP_AGENT_MAIL_SESSION_BINDING_TTL_SECONDS", default=86400),
         auto_retire_stale_agents_enabled=_b("AUTO_RETIRE_STALE_AGENTS_ENABLED", default=True),
         auto_retire_stale_agents_interval_seconds=_i("AUTO_RETIRE_STALE_AGENTS_INTERVAL_SECONDS", default=3600),
