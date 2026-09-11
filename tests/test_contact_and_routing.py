@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from fastmcp import Client
-from sqlmodel import col
+from sqlmodel import col, select
 
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.config import clear_settings_cache, get_settings
+from mcp_agent_mail.config import clear_settings_cache
 from mcp_agent_mail.db import ensure_schema, get_db_health_status, get_session
-from mcp_agent_mail.models import Agent, AgentLink, Project
+from mcp_agent_mail.models import Agent, AgentLink, Message, MessageRecipient, Project
 
 
 async def _seed_two_projects_no_link() -> None:
@@ -178,10 +176,15 @@ async def test_external_cross_project_routing(isolated_env):
         # Should deliver to Ops project via external routing bucket
         assert any(d.get("project") == "Ops" for d in deliveries)
 
-        # Verify archive in Ops contains message file
-        storage_root = Path(get_settings().storage.root).expanduser().resolve()
-        ops_dir = storage_root / "projects" / "ops" / "messages"
-        assert any(ops_dir.rglob("*.md"))
+        # Verify the authoritative database owns the Ops delivery.
+        async with get_session() as session:
+            messages = (
+                await session.execute(select(Message).where(col(Message.project_id) == p2.id))
+            ).scalars().all()
+            recipients = (
+                await session.execute(select(MessageRecipient).where(col(MessageRecipient.agent_id) == b_recv.id))
+            ).scalars().all()
+        assert any(recipient.message_id == message.id for recipient in recipients for message in messages)
 
 
 @pytest.mark.asyncio
@@ -386,9 +389,18 @@ async def test_bare_name_prefers_cross_project_over_local_shadow(isolated_env):
             f"deliveries={delivered_projects!r}"
         )
 
-        storage_root = Path(get_settings().storage.root).expanduser().resolve()
-        servitor_dir = storage_root / "projects" / "servitor" / "messages"
-        assert any(servitor_dir.rglob("*.md")), "no message archived in Servitor"
+        async with get_session() as session:
+            messages = (
+                await session.execute(select(Message).where(col(Message.project_id) == p_remote.id))
+            ).scalars().all()
+            recipients = (
+                await session.execute(
+                    select(MessageRecipient).where(col(MessageRecipient.agent_id) == remote_real.id)
+                )
+            ).scalars().all()
+        assert any(
+            recipient.message_id == message.id for recipient in recipients for message in messages
+        ), "no database-owned delivery in Servitor"
 
 
 @pytest.mark.asyncio

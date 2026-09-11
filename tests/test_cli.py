@@ -10,12 +10,19 @@ from typing import Any
 from zipfile import ZipFile
 
 import pytest
+from sqlmodel import select
 from typer.testing import CliRunner
 
 from mcp_agent_mail.cli import app
 from mcp_agent_mail.config import clear_settings_cache, get_settings
 from mcp_agent_mail.db import ensure_schema, get_session
-from mcp_agent_mail.models import Agent, FileReservation, Project
+from mcp_agent_mail.models import (
+    Agent,
+    AgentConversationBinding,
+    FileReservation,
+    McpClientPrincipal,
+    Project,
+)
 
 
 def test_cli_lint(monkeypatch):
@@ -369,3 +376,74 @@ def test_doctor_check_scopes_project_specific_findings(isolated_env):
     diagnostics = json.loads(result.stdout)["diagnostics"]
     assert "1 stale lock" in next(item for item in diagnostics if item["name"] == "Locks")["message"].lower()
     assert "1 expired reservation" in next(item for item in diagnostics if item["name"] == "File Reservations")["message"].lower()
+
+
+def test_identity_admin_cli_grants_and_revokes_client(isolated_env):
+    client_uid = "cli-administrator-client-0001"
+
+    async def seed() -> tuple[int, int]:
+        await ensure_schema()
+        async with get_session() as session:
+            project = Project(slug="identity-cli", human_key="/identity/cli")
+            session.add(project)
+            await session.flush()
+            assert project.id is not None
+            agent = Agent(
+                project_id=project.id,
+                name="CoralBeacon",
+                program="pi",
+                model="test",
+                binding_generation=1,
+            )
+            principal = McpClientPrincipal(
+                client_uid=client_uid,
+                credential_hash="a" * 64,
+                scopes=["mailbox.identity.self"],
+            )
+            session.add(agent)
+            session.add(principal)
+            await session.flush()
+            assert agent.id is not None
+            assert principal.id is not None
+            binding = AgentConversationBinding(
+                client_principal_id=principal.id,
+                project_id=project.id,
+                agent_id=agent.id,
+                conversation_binding_hash="b" * 64,
+                generation=1,
+            )
+            session.add(binding)
+            await session.commit()
+            assert binding.id is not None
+            return agent.id, binding.id
+
+    agent_id, binding_id = asyncio.run(seed())
+    runner = CliRunner()
+
+    listed = runner.invoke(app, ["identity", "list-clients"])
+    granted = runner.invoke(app, ["identity", "grant-admin", client_uid])
+    revoked = runner.invoke(app, ["identity", "revoke-client", client_uid])
+
+    assert listed.exit_code == 0
+    assert "Trusted MCP client principals" in listed.stdout
+    assert granted.exit_code == 0
+    assert "mailbox.identity.admin" in granted.stdout
+    assert revoked.exit_code == 0
+    assert "invalidated 1 active" in revoked.stdout
+    assert "binding(s)" in revoked.stdout
+
+    async def verify() -> None:
+        async with get_session() as session:
+            principal = (
+                await session.execute(
+                    select(McpClientPrincipal).where(McpClientPrincipal.client_uid == client_uid)
+                )
+            ).scalars().one()
+            binding = await session.get(AgentConversationBinding, binding_id)
+            agent = await session.get(Agent, agent_id)
+            assert principal.status == "revoked"
+            assert "mailbox.identity.admin" in principal.scopes
+            assert binding is not None and binding.status == "revoked"
+            assert agent is not None and agent.binding_generation == 2
+
+    asyncio.run(verify())

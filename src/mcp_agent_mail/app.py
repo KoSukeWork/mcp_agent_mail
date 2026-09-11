@@ -41,7 +41,12 @@ from sqlalchemy.orm import aliased
 from . import rich_logger
 from .config import Settings, get_settings
 from .db import (
+    IdentityWriteFence,
+    IdentityWriteFenceError,
+    add_identity_write_fence,
+    begin_identity_write_fence_scope,
     dispose_engine_blocking,
+    end_identity_write_fence_scope,
     ensure_schema,
     get_engine,
     get_immediate_session,
@@ -56,12 +61,15 @@ from .guard import install_guard as install_guard_script, uninstall_guard as uni
 from .identity import (
     ClientConversationCredentials,
     ConversationIdentityError,
+    ResolvedConversationIdentity,
     bind_conversation_identity,
+    create_bound_agent_identity,
     decide_identity_transfer,
     get_identity_confirmation_status,
     list_client_agent_bindings,
     parse_identity_metadata,
     release_conversation_identity,
+    request_identity_recovery,
     request_identity_transfer,
     resolve_conversation_identity,
 )
@@ -481,6 +489,7 @@ def _instrument_tool(
 
             result = None
             error = None
+            identity_fence_token = begin_identity_write_fence_scope()
             try:
                 try:
                     result = await func(*args, **kwargs)
@@ -586,6 +595,17 @@ def _instrument_tool(
                 )
                 error = wrapped_exc
                 raise wrapped_exc from exc
+            except IdentityWriteFenceError as exc:
+                metrics["errors"] += 1
+                _record_tool_error(tool_name, exc)
+                wrapped_exc = ToolExecutionError(
+                    "IDENTITY_SESSION_REVOKED",
+                    str(exc),
+                    recoverable=True,
+                    data={"tool": tool_name},
+                )
+                error = wrapped_exc
+                raise wrapped_exc from exc
             except TimeoutError as exc:
                 # Timeout (database lock, network, etc.)
                 metrics["errors"] += 1
@@ -657,6 +677,7 @@ def _instrument_tool(
                 error = wrapped_exc
                 raise wrapped_exc from exc
             finally:
+                end_identity_write_fence_scope(identity_fence_token)
                 _record_recent(tool_name, project_value, agent_value)
 
                 query_stats = None
@@ -3617,8 +3638,8 @@ async def _ensure_agent_registration_token(
     agent: Agent,
     *,
     rotate: bool = False,
-) -> tuple[Agent, str]:
-    """Ensure an agent has a stable registration token and return it."""
+) -> tuple[Agent, str | None]:
+    """Create or rotate a token once, storing only its verification hash."""
     if agent.id is None:
         raise ValueError("Agent must have an id before ensuring a registration token.")
 
@@ -3627,14 +3648,59 @@ async def _ensure_agent_registration_token(
         if db_agent is None:
             raise NoResultFound(f"Agent id '{agent.id}' no longer exists.")
 
-        token = db_agent.registration_token
-        if rotate or not token:
+        token = (db_agent.registration_token or "").strip() or None
+        if rotate or (token is None and not db_agent.service_credential_hash):
             token = secrets.token_urlsafe(32)
-            db_agent.registration_token = token
+            db_agent.service_credential_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            db_agent.service_credential_version = max(1, db_agent.service_credential_version + 1)
+            db_agent.service_credential_rotated_at = _naive_utc()
+            db_agent.registration_token = None
             session.add(db_agent)
             await session.commit()
             await session.refresh(db_agent)
-        return db_agent, str(token)
+        elif token is not None:
+            db_agent.service_credential_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            db_agent.service_credential_version = max(1, db_agent.service_credential_version)
+            db_agent.service_credential_rotated_at = db_agent.service_credential_rotated_at or _naive_utc()
+            db_agent.registration_token = None
+            session.add(db_agent)
+            await session.commit()
+            await session.refresh(db_agent)
+        return db_agent, token
+
+
+def _agent_registration_token_matches(agent: Agent, provided_token: str | None) -> bool:
+    """Verify a high-entropy Agent token against legacy plaintext or migrated hash storage."""
+    if not provided_token:
+        return False
+    stored_token = (agent.registration_token or "").strip()
+    if stored_token and hmac.compare_digest(provided_token, stored_token):
+        return True
+    stored_hash = (agent.service_credential_hash or "").strip()
+    if not stored_hash:
+        return False
+    provided_hash = hashlib.sha256(provided_token.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(provided_hash, stored_hash)
+
+
+async def _migrate_agent_registration_token(agent: Agent) -> Agent:
+    """Replace a transcript-era plaintext token with a verification-only hash."""
+    if agent.id is None:
+        raise ValueError("Agent must have an id before migrating its registration token.")
+    async with get_session() as session:
+        db_agent = await session.get(Agent, agent.id)
+        if db_agent is None:
+            raise NoResultFound(f"Agent id '{agent.id}' no longer exists.")
+        token = (db_agent.registration_token or "").strip()
+        if token:
+            db_agent.service_credential_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            db_agent.service_credential_version = max(1, db_agent.service_credential_version + 1)
+            db_agent.service_credential_rotated_at = _naive_utc()
+            db_agent.registration_token = None
+            session.add(db_agent)
+            await session.commit()
+            await session.refresh(db_agent)
+        return db_agent
 
 
 def _message_visible_to_agent_clause(agent_id: int) -> Any:
@@ -5093,6 +5159,28 @@ def build_mcp_server() -> FastMCP:
         except ValueError:
             return None
 
+    def _activate_identity_write_fence(
+        credentials: ClientConversationCredentials,
+        resolved: ResolvedConversationIdentity,
+    ) -> None:
+        principal_id = resolved.principal.id
+        project_id = resolved.agent.project_id
+        agent_id = resolved.agent.id
+        if principal_id is None or agent_id is None:
+            raise ToolExecutionError(
+                "IDENTITY_BINDING_CONFLICT",
+                "The persistent conversation binding is incomplete.",
+            )
+        add_identity_write_fence(
+            IdentityWriteFence(
+                principal_id=principal_id,
+                project_id=project_id,
+                agent_id=agent_id,
+                conversation_binding_hash=credentials.conversation_hash,
+                generation=resolved.binding.generation,
+            )
+        )
+
     async def _resolve_persistent_conversation_agent(
         ctx: Context,
         project: Project,
@@ -5106,6 +5194,7 @@ def build_mcp_server() -> FastMCP:
             raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
         if resolved is None:
             return None
+        _activate_identity_write_fence(credentials, resolved)
         _bind_session_agent(ctx, project, resolved.agent)
         return resolved.agent
 
@@ -5154,24 +5243,29 @@ def build_mcp_server() -> FastMCP:
             try:
                 resolved = await resolve_conversation_identity(project, credentials)
             except ConversationIdentityError as exc:
-                if exc.error_type != "UNTRUSTED_CONVERSATION_CONTEXT" or not provided_token:
-                    raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
-            else:
-                if resolved is not None:
-                    if resolved.agent.id != agent.id:
-                        raise ToolExecutionError(
-                            "IDENTITY_BINDING_CONFLICT",
-                            "This conversation is bound to a different Agent identity.",
-                            recoverable=True,
-                            data={
-                                "project_key": project.human_key,
-                                "bound_agent_name": resolved.agent.name,
-                                "requested_agent_name": agent.name,
-                            },
-                        )
-                    _bind_session_agent(ctx, project, agent)
-                    await _touch_agent_activity(agent)
-                    return agent
+                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            if resolved is None:
+                raise ToolExecutionError(
+                    "IDENTITY_BINDING_REQUIRED",
+                    "This trusted conversation has no Agent identity in the mailbox. Use ensure_agent_identity first.",
+                    recoverable=True,
+                    data={"project_key": project.human_key},
+                )
+            if resolved.agent.id != agent.id:
+                raise ToolExecutionError(
+                    "IDENTITY_BINDING_CONFLICT",
+                    "This conversation is bound to a different Agent identity.",
+                    recoverable=True,
+                    data={
+                        "project_key": project.human_key,
+                        "bound_agent_name": resolved.agent.name,
+                        "requested_agent_name": agent.name,
+                    },
+                )
+            _activate_identity_write_fence(credentials, resolved)
+            _bind_session_agent(ctx, project, agent)
+            await _touch_agent_activity(agent)
+            return agent
         if _session_is_bound_to_agent(ctx, project, agent):
             _bind_session_agent(ctx, project, agent)
             # Issue #255: any authenticated, self-initiated call counts as
@@ -5179,8 +5273,10 @@ def build_mcp_server() -> FastMCP:
             await _touch_agent_activity(agent)
             return agent
 
-        stored_token = (agent.registration_token or "").strip()
-        if not stored_token:
+        has_registration_credential = bool(
+            (agent.registration_token or "").strip() or (agent.service_credential_hash or "").strip()
+        )
+        if not has_registration_credential:
             # Adjacent-agent auth for legacy tokenless agents: retire_agent
             # and hard_delete_agent can be authorized by any other authenticated
             # agent in the same project. This unsticks cleanup of pre-token
@@ -5227,7 +5323,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
                 data={"agent_name": agent.name, "project_key": project.human_key, "token_param": token_param},
             )
-        if not hmac.compare_digest(provided_token, stored_token):
+        if not _agent_registration_token_matches(agent, provided_token):
             raise ToolExecutionError(
                 "AUTHENTICATION_REQUIRED",
                 f"Invalid {token_param} for agent '{agent.name}'.",
@@ -5283,6 +5379,13 @@ def build_mcp_server() -> FastMCP:
         agent = await _resolve_session_agent_for_project(ctx, project)
         if agent is not None:
             return agent
+        if _conversation_credentials(ctx) is not None:
+            raise ToolExecutionError(
+                "IDENTITY_BINDING_REQUIRED",
+                "This trusted conversation has no Agent identity in the mailbox. Use ensure_agent_identity first.",
+                recoverable=True,
+                data={"project_key": project.human_key},
+            )
 
         if project.id is None:
             raise ValueError("Project must have an id before authenticating project-scoped actions.")
@@ -5291,7 +5394,10 @@ def build_mcp_server() -> FastMCP:
             agents_result = await session.execute(
                 select(Agent).where(
                     cast(Any, Agent.project_id) == project.id,
-                    cast(Any, Agent.registration_token).isnot(None),
+                    or_(
+                        cast(Any, Agent.registration_token).isnot(None),
+                        cast(Any, Agent.service_credential_hash).isnot(None),
+                    ),
                 )
             )
             token_agents = agents_result.scalars().all()
@@ -5315,7 +5421,7 @@ def build_mcp_server() -> FastMCP:
             )
 
         for token_agent in token_agents:
-            if token_agent.registration_token and hmac.compare_digest(provided_token, token_agent.registration_token):
+            if _agent_registration_token_matches(token_agent, provided_token):
                 _bind_session_agent(ctx, project, token_agent)
                 return token_agent
 
@@ -5348,7 +5454,13 @@ def build_mcp_server() -> FastMCP:
             projects = list(project_rows.scalars().all())
 
         authorized: list[tuple[Project, Agent]] = []
+        conversation_credentials = _conversation_credentials(ctx)
         for project in projects:
+            if conversation_credentials is not None:
+                persistent_agent = await _resolve_persistent_conversation_agent(ctx, project)
+                if persistent_agent is not None and (agent_name is None or persistent_agent.name == agent_name):
+                    authorized.append((project, persistent_agent))
+                continue
             if agent_name:
                 agent = await _find_agent_optional(project, agent_name)
                 if agent is None:
@@ -5357,8 +5469,7 @@ def build_mcp_server() -> FastMCP:
                     _bind_session_agent(ctx, project, agent)
                     authorized.append((project, agent))
                     continue
-                stored_token = (agent.registration_token or "").strip()
-                if stored_token and provided_token and hmac.compare_digest(provided_token, stored_token):
+                if _agent_registration_token_matches(agent, provided_token):
                     _bind_session_agent(ctx, project, agent)
                     authorized.append((project, agent))
                     continue
@@ -6003,15 +6114,37 @@ def build_mcp_server() -> FastMCP:
                 window_identity = await _get_window_identity(project, window_uuid)
                 if window_identity is not None:
                     existing_agent = await _find_agent_optional(project, window_identity.display_name)
+        credentials = _conversation_credentials(ctx)
         if existing_agent is not None:
-            await _authenticate_agent(
-                ctx,
-                project,
-                existing_agent.name,
-                registration_token,
-                token_param="registration_token",
-                action="register_agent for an existing identity",
-            )
+            if credentials is None:
+                await _authenticate_agent(
+                    ctx,
+                    project,
+                    existing_agent.name,
+                    registration_token,
+                    token_param="registration_token",
+                    action="register_agent for an existing identity",
+                )
+            else:
+                try:
+                    current_identity = await resolve_conversation_identity(project, credentials)
+                except ConversationIdentityError as exc:
+                    if exc.error_type != "UNTRUSTED_CONVERSATION_CONTEXT":
+                        raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+                    current_identity = None
+                if current_identity is not None and current_identity.agent.id != existing_agent.id:
+                    raise ToolExecutionError(
+                        "IDENTITY_BINDING_CONFLICT",
+                        "This conversation is already bound to a different Agent identity.",
+                        recoverable=True,
+                    )
+                if current_identity is None and not _agent_registration_token_matches(existing_agent, registration_token):
+                    raise ToolExecutionError(
+                        "AUTHENTICATION_REQUIRED",
+                        "A valid existing registration_token is required for the one-time trusted identity migration.",
+                        recoverable=True,
+                        data={"agent_name": existing_agent.name, "project_key": project.human_key},
+                    )
         agent = await _get_or_create_agent(project, name, program, model, task_description, settings)
         # Persist attachment policy if changed
         if getattr(agent, "attachments_policy", None) != ap:
@@ -6023,7 +6156,6 @@ def build_mcp_server() -> FastMCP:
                     await session.commit()
                     await session.refresh(db_agent)
                     agent = db_agent
-        credentials = _conversation_credentials(ctx)
         token: str | None = None
         if credentials is None:
             agent, token = await _ensure_agent_registration_token(agent)
@@ -6040,11 +6172,15 @@ def build_mcp_server() -> FastMCP:
                 )
             except ConversationIdentityError as exc:
                 raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            _activate_identity_write_fence(credentials, resolved_identity)
+            agent = await _migrate_agent_registration_token(agent)
+            result = _agent_to_dict(agent)
             result["credential_managed_by_mcp"] = True
             result["binding_generation"] = resolved_identity.binding.generation
-        else:
-            assert token is not None
+        elif token is not None:
             result["registration_token"] = token
+        else:
+            result["registration_token_returned"] = False
         # Enrich with window identity info if MCP_AGENT_MAIL_WINDOW_ID is set.
         # NOTE: _get_or_create_agent already resolved this for the archive profile,
         # but propagating it via return type would churn 8+ callers for a cold-path query.
@@ -6591,10 +6727,9 @@ def build_mcp_server() -> FastMCP:
             freshly-minted `registration_token`. When False, the token is omitted
             from the tool result so transcript-visible MCP sessions can satisfy
             a "do not echo secrets into scrollback" contract; the agent is still
-            bound to the current MCP session via `_bind_session_agent`, so
-            follow-up calls in the same session can authenticate without
-            ever surfacing the token. The token still exists on the server
-            and can be retrieved or rotated through the normal admin paths.
+        bound to the current MCP session via `_bind_session_agent`, so
+        follow-up calls in the same session can authenticate without
+        ever surfacing a token. Only a verification hash is retained.
             See issue #154.
 
         Returns
@@ -6666,14 +6801,125 @@ def build_mcp_server() -> FastMCP:
             result["binding_generation"] = resolved_identity.binding.generation
             result["registration_token_returned"] = False
         elif return_registration_token:
-            assert token is not None
-            result["registration_token"] = token
+            if token is not None:
+                result["registration_token"] = token
+            else:
+                result["registration_token_returned"] = False
         else:
-            # Caller opted out of token echo (issue #154). The token still
-            # exists server-side; the agent is bound to this MCP session so
-            # follow-up calls can authenticate without ever surfacing it.
+            # Caller opted out of token echo (issue #154). Only a verification
+            # hash is retained; this MCP session remains bound for follow-up calls.
             result["registration_token_returned"] = False
         return result
+
+    @mcp.tool(
+        name="ensure_agent_identity",
+        description=(
+            "Resolve this conversation's persistent Agent identity, creating a new one only when unbound. "
+            "Trusted MCP metadata selects the conversation; no reusable Agent token is returned."
+        ),
+    )
+    @_instrument_tool(
+        "ensure_agent_identity",
+        cluster=CLUSTER_IDENTITY,
+        capabilities={"identity", "write"},
+        agent_arg="name_hint",
+        project_arg="project_key",
+    )
+    async def ensure_agent_identity(
+        ctx: Context,
+        project_key: str,
+        program: str,
+        model: str,
+        name_hint: Optional[str] = None,
+        task_description: str = "",
+        attachments_policy: str = "auto",
+        format: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Create or reconnect one model-inaccessible persistent conversation identity."""
+        _validate_program_model(program, model)
+        project = await _get_project_by_identifier(project_key)
+        credentials = _conversation_credentials(ctx)
+        if credentials is None:
+            raise ToolExecutionError(
+                "UNTRUSTED_CONVERSATION_CONTEXT",
+                "Persistent Agent identity requires trusted per-conversation metadata from the MCP client.",
+                recoverable=True,
+            )
+        try:
+            existing = await resolve_conversation_identity(project, credentials)
+        except ConversationIdentityError as exc:
+            if exc.error_type != "UNTRUSTED_CONVERSATION_CONTEXT":
+                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            existing = None
+        if existing is not None:
+            _activate_identity_write_fence(credentials, existing)
+            async with get_session() as session:
+                agent = await session.get(Agent, existing.agent.id)
+                if agent is None:
+                    raise ToolExecutionError(
+                        "IDENTITY_BINDING_CONFLICT",
+                        "The persistent conversation binding no longer points to an Agent.",
+                    )
+                agent.program = program
+                agent.model = model
+                agent.task_description = task_description
+                agent.last_active_ts = _naive_utc()
+                agent.retired_at = None
+                session.add(agent)
+                await session.commit()
+                await session.refresh(agent)
+            _bind_session_agent(ctx, project, agent)
+            return {
+                **_agent_to_dict(agent),
+                "credential_managed_by_mcp": True,
+                "binding_generation": existing.binding.generation,
+                "identity_action": "reconnected",
+            }
+
+        unique_name = await _generate_unique_agent_name(project, settings, name_hint)
+        policy = (attachments_policy or "auto").lower()
+        if policy not in {"auto", "inline", "file"}:
+            policy = "auto"
+        try:
+            resolved = await create_bound_agent_identity(
+                project,
+                credentials,
+                name=unique_name,
+                program=program,
+                model=model,
+                task_description=task_description,
+                attachments_policy=policy,
+            )
+        except ConversationIdentityError as exc:
+            if exc.error_type != "IDENTITY_BINDING_CONFLICT":
+                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            try:
+                resolved = await resolve_conversation_identity(project, credentials)
+            except ConversationIdentityError as resolve_exc:
+                raise ToolExecutionError(
+                    resolve_exc.error_type,
+                    str(resolve_exc),
+                    recoverable=True,
+                    data=resolve_exc.data,
+                ) from resolve_exc
+            if resolved is None:
+                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            _activate_identity_write_fence(credentials, resolved)
+            _bind_session_agent(ctx, project, resolved.agent)
+            return {
+                **_agent_to_dict(resolved.agent),
+                "credential_managed_by_mcp": True,
+                "binding_generation": resolved.binding.generation,
+                "identity_action": "reconnected",
+            }
+        agent = resolved.agent
+        _bind_session_agent(ctx, project, agent)
+        return {
+            **_agent_to_dict(agent),
+            "credential_managed_by_mcp": True,
+            "binding_generation": resolved.binding.generation,
+            "identity_action": "created",
+        }
 
     @mcp.tool(
         name="identity_status",
@@ -6721,6 +6967,7 @@ def build_mcp_server() -> FastMCP:
         if resolved is not None:
             payload["agent"] = _agent_to_dict(resolved.agent)
             payload["binding_generation"] = resolved.binding.generation
+            payload["client_principal_uid"] = resolved.principal.client_uid
         return payload
 
     @mcp.tool(
@@ -6789,6 +7036,100 @@ def build_mcp_server() -> FastMCP:
             _bind_session_agent(ctx, project, resolved.agent)
             return {
                 "status": "transferred",
+                "confirmation_request_id": pending.request.request_uid,
+                "agent": _agent_to_dict(resolved.agent),
+                "binding_generation": resolved.binding.generation,
+            }
+
+        if not settings.identity_browser_confirmation_enabled or not credentials.browser_confirmation:
+            return {
+                "status": "pending",
+                "confirmation_request_id": pending.request.request_uid,
+                "agent_name": agent.name,
+                "error": "IDENTITY_TRANSFER_CONFIRMATION_REQUIRED",
+                "message": "This MCP client must support native elicitation or browser confirmation.",
+            }
+        confirmation_url = (
+            f"{settings.identity_confirmation_base_url}/identity/confirm/"
+            f"{pending.request.request_uid}#challenge={pending.challenge}"
+        )
+        return {
+            "status": "pending",
+            "confirmation_request_id": pending.request.request_uid,
+            "agent_name": agent.name,
+            "_client_action": {
+                "type": "open_browser",
+                "url": confirmation_url,
+                "sensitive": True,
+            },
+        }
+
+    @mcp.tool(
+        name="recover_agent_identity",
+        description=(
+            "Request administrator recovery of an existing Agent into this conversation. "
+            "Requires mailbox.identity.admin authority and explicit elicitation or browser confirmation."
+        ),
+    )
+    @_instrument_tool(
+        "recover_agent_identity",
+        cluster=CLUSTER_IDENTITY,
+        capabilities={"identity", "write"},
+        agent_arg="agent_name",
+        project_arg="project_key",
+    )
+    async def recover_agent_identity(
+        ctx: Context,
+        project_key: str,
+        agent_name: str,
+        format: Optional[str] = None,
+    ) -> dict[str, Any]:
+        project = await _get_project_by_identifier(project_key)
+        agent = await _get_agent(project, agent_name)
+        credentials = _conversation_credentials(ctx)
+        if credentials is None:
+            raise ToolExecutionError(
+                "UNTRUSTED_CONVERSATION_CONTEXT",
+                "Identity recovery requires trusted per-conversation metadata from the MCP client.",
+                recoverable=True,
+            )
+        try:
+            pending = await request_identity_recovery(
+                project,
+                agent,
+                credentials,
+                ttl_seconds=settings.identity_confirmation_ttl_seconds,
+            )
+        except ConversationIdentityError as exc:
+            raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+
+        capabilities = getattr(getattr(ctx.session, "client_params", None), "capabilities", None)
+        if getattr(capabilities, "elicitation", None) is not None:
+            choice = await ctx.elicit(
+                (
+                    f"Recover Agent {agent.name} in {project.human_key} into this administrator conversation? "
+                    "Any previously bound conversation will immediately lose permission to act as this Agent."
+                ),
+                ["Approve recovery", "Deny"],
+            )
+            approved = getattr(choice, "action", None) == "accept" and getattr(choice, "data", None) == "Approve recovery"
+            try:
+                resolved = await decide_identity_transfer(
+                    pending.request.request_uid,
+                    pending.challenge,
+                    approve=approved,
+                )
+            except ConversationIdentityError as exc:
+                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            if resolved is None:
+                return {
+                    "status": "denied",
+                    "confirmation_request_id": pending.request.request_uid,
+                    "agent_name": agent.name,
+                }
+            _bind_session_agent(ctx, project, resolved.agent)
+            return {
+                "status": "recovered",
                 "confirmation_request_id": pending.request.request_uid,
                 "agent": _agent_to_dict(resolved.agent),
                 "binding_generation": resolved.binding.generation,

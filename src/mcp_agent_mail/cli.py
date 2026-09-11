@@ -47,6 +47,7 @@ from sqlalchemy.sql import ColumnElement
 
 from .app import (
     _LIKE_ESCAPE_CHAR,
+    _agent_registration_token_matches,
     _canonicalize_project_identifier,
     _extract_like_terms,
     _like_escape,
@@ -57,6 +58,7 @@ from .app import (
 from .config import clear_settings_cache, get_settings
 from .db import (
     ensure_schema,
+    get_immediate_session,
     get_session,
     get_sqlite_sidecar_paths,
     reset_database_state,
@@ -65,8 +67,10 @@ from .guard import install_guard as install_guard_script, uninstall_guard as uni
 from .http import build_http_app
 from .models import (
     Agent,
+    AgentConversationBinding,
     AgentLink,
     FileReservation,
+    McpClientPrincipal,
     Message,
     MessageRecipient,
     Product,
@@ -201,68 +205,12 @@ def _parse_jsonrpc_response(response: Any, *, request_name: str) -> Any:
     return _extract_jsonrpc_result(payload, request_name=request_name)
 
 
-async def _lookup_agent_registration_token(project_human_key: str, agent_name: str) -> str | None:
-    """Resolve a locally stored registration token for a project/agent pair."""
-    await ensure_schema()
-    async with get_session() as session:
-        result = await session.execute(
-            select(Agent.registration_token)
-            .join(Project, cast(ColumnElement[bool], Agent.project_id == Project.id))
-            .where(
-                cast(ColumnElement[bool], Project.human_key == project_human_key),
-                func.lower(Agent.name) == agent_name.lower(),
-            )
-        )
-        token = result.scalar_one_or_none()
-    if token is None:
-        return None
-    normalized_token = str(token).strip()
-    return normalized_token or None
-
-
-async def _lookup_product_registration_token(product_key: str, agent_name: str) -> str | None:
-    """Resolve a unique locally stored registration token for a product/agent pair."""
-    await ensure_schema()
-    async with get_session() as session:
-        product = (
-            await session.execute(
-                select(Product).where(
-                    or_(
-                        cast(ColumnElement[bool], Product.product_uid == product_key),
-                        cast(ColumnElement[bool], Product.name == product_key),
-                    )
-                )
-            )
-        ).scalars().first()
-        if product is None or product.id is None:
-            return None
-        token_rows = await session.execute(
-            select(Agent.registration_token)
-            .join(Project, cast(ColumnElement[bool], Agent.project_id == Project.id))
-            .join(ProductProjectLink, cast(ColumnElement[bool], ProductProjectLink.project_id == Project.id))
-            .where(
-                cast(ColumnElement[bool], ProductProjectLink.product_id == product.id),
-                func.lower(Agent.name) == agent_name.lower(),
-            )
-        )
-        tokens = {
-            str(token).strip()
-            for token in token_rows.scalars().all()
-            if str(token or "").strip()
-        }
-    if len(tokens) != 1:
-        return None
-    return next(iter(tokens))
-
-
 async def _resolve_local_product_agents(
     product_key: str,
     agent_name: str,
     registration_token: str | None,
 ) -> tuple[Product, list[tuple[Project, Agent]], str | None]:
     """Resolve locally authorized product agents using the same token semantics as the server."""
-    import hmac as _hmac
-
     await ensure_schema()
     async with get_session() as session:
         product = (
@@ -290,20 +238,10 @@ async def _resolve_local_product_agents(
         project_agents = list(rows.all())
 
     effective_token = (registration_token or "").strip() or None
-    if effective_token is None:
-        unique_tokens = {
-            str(agent.registration_token).strip()
-            for _project, agent in project_agents
-            if str(agent.registration_token or "").strip()
-        }
-        if len(unique_tokens) == 1:
-            effective_token = next(iter(unique_tokens))
-
     authorized: list[tuple[Project, Agent]] = []
     if effective_token is not None:
         for project, agent in project_agents:
-            stored_token = str(agent.registration_token or "").strip()
-            if stored_token and _hmac.compare_digest(effective_token, stored_token):
+            if _agent_registration_token_matches(agent, effective_token):
                 authorized.append((project, agent))
 
     return product, authorized, effective_token
@@ -389,6 +327,7 @@ acks_app = typer.Typer(help="Review acknowledgement status")
 share_app = typer.Typer(help="Export MCP Agent Mail data for static sharing")
 config_app = typer.Typer(help="Configure server settings")
 archive_app = typer.Typer(help="Archive and restore local mailbox states (lossless disaster-recovery bundles)")
+identity_app = typer.Typer(help="Administer trusted MCP client principals")
 
 app.add_typer(guard_app, name="guard")
 app.add_typer(file_reservations_app, name="file_reservations")
@@ -396,6 +335,7 @@ app.add_typer(acks_app, name="acks")
 app.add_typer(share_app, name="share")
 app.add_typer(config_app, name="config")
 app.add_typer(archive_app, name="archive")
+app.add_typer(identity_app, name="identity")
 mail_app = typer.Typer(help="Mail diagnostics and routing status")
 app.add_typer(mail_app, name="mail")
 projects_app = typer.Typer(help="Project maintenance utilities")
@@ -680,7 +620,7 @@ def products_search(
         "products search",
         product_key,
         agent_name,
-        registration_token or _run_async(_lookup_product_registration_token(product_key, agent_name)),
+        registration_token,
     )
 
     settings = get_settings()
@@ -864,7 +804,7 @@ def products_inbox(
         "products inbox",
         product_key,
         agent,
-        registration_token or _run_async(_lookup_product_registration_token(product_key, agent)),
+        registration_token,
     )
     # Try server first
     rows: list[dict[str, Any]] | None = None
@@ -1044,7 +984,7 @@ def products_summarize_thread(
         "products summarize-thread",
         product_key,
         agent_name,
-        registration_token or _run_async(_lookup_product_registration_token(product_key, agent_name)),
+        registration_token,
     )
     # Try server
     try:
@@ -3304,13 +3244,11 @@ def hard_delete_agent(
     settings = get_settings()
 
     async def _execute() -> dict[str, Any]:
-        import hmac as _hmac
-
         await ensure_schema(settings)
         proj = await _get_project_record(project)
         agent = await _get_agent_record(proj, agent_name)
 
-        if not agent.registration_token:
+        if not agent.registration_token and not agent.service_credential_hash:
             if not legacy_cleanup:
                 raise ValueError(
                     "Agent has no registration_token, so hard delete cannot be authenticated. "
@@ -3321,7 +3259,7 @@ def hard_delete_agent(
                 f"[yellow]--legacy-cleanup: deleting tokenless legacy agent "
                 f"'{agent_name}' in project '{project}' without token check.[/]"
             )
-        elif not _hmac.compare_digest(registration_token or "", agent.registration_token):
+        elif not _agent_registration_token_matches(agent, registration_token):
             raise ValueError("Invalid registration_token — only the agent's owner can hard-delete it")
 
         agent_id = agent.id
@@ -3464,7 +3402,6 @@ def hard_delete_project(
     settings = get_settings()
 
     async def _execute() -> dict[str, Any]:
-        import hmac as _hmac
 
         await ensure_schema(settings)
         proj = await _get_project_record(project)
@@ -3476,7 +3413,10 @@ def hard_delete_project(
             agents_result = await session.execute(
                 select(Agent).where(
                     cast(Any, Agent.project_id) == project_id,
-                    cast(Any, Agent.registration_token).isnot(None),
+                    or_(
+                        cast(Any, Agent.registration_token).isnot(None),
+                        cast(Any, Agent.service_credential_hash).isnot(None),
+                    ),
                 )
             )
             token_agents = agents_result.scalars().all()
@@ -3485,11 +3425,7 @@ def hard_delete_project(
                     "Project has no token-bearing agents, so hard delete cannot be authenticated. "
                     "Register or create an agent identity first."
                 )
-            if not registration_token or not any(
-                _hmac.compare_digest(registration_token, a.registration_token)
-                for a in token_agents
-                if a.registration_token
-            ):
+            if not any(_agent_registration_token_matches(agent, registration_token) for agent in token_agents):
                 raise ValueError("Invalid registration_token — must match a registered agent in the project")
 
         from .lifecycle import hard_delete_mailbox
@@ -3954,11 +3890,10 @@ def am_run(
 
             if use_server:
                 if not resolved_registration_token:
-                    resolved_registration_token = _run_async(_lookup_agent_registration_token(str(p), agent_name))
-                if not resolved_registration_token:
                     raise click.ClickException(
-                        "am-run requires a registered agent with a registration token when the server is reachable. "
-                        "Register the agent first, or pass --registration-token / $AGENT_MAIL_REGISTRATION_TOKEN."
+                        "am-run requires --registration-token or $AGENT_MAIL_REGISTRATION_TOKEN when the server is "
+                        "reachable. Agent credentials are stored as verification-only hashes and cannot be recovered "
+                        "from the database."
                     )
                 conflicts: list[dict[str, Any]] = []
                 try:
@@ -4777,6 +4712,127 @@ def list_acks(
     for msg, _ in rows:
         table.add_row(str(msg.id or ""), msg.subject, msg.importance, msg.created_ts.isoformat())
     console.print(table)
+
+
+async def _identity_client_rows() -> list[McpClientPrincipal]:
+    await ensure_schema()
+    async with get_session() as session:
+        result = await session.execute(select(McpClientPrincipal).order_by(McpClientPrincipal.id))
+        return list(result.scalars().all())
+
+
+@identity_app.command("list-clients")
+def identity_list_clients() -> None:
+    """List enrolled MCP client principals without credential material."""
+    rows = asyncio.run(_identity_client_rows())
+    table = Table(title="Trusted MCP client principals")
+    table.add_column("ID", justify="right")
+    table.add_column("Client UID")
+    table.add_column("Label")
+    table.add_column("Status")
+    table.add_column("Scopes")
+    table.add_column("Last authenticated")
+    for principal in rows:
+        table.add_row(
+            str(principal.id or ""),
+            principal.client_uid,
+            principal.display_label or "—",
+            principal.status,
+            ", ".join(principal.scopes) or "—",
+            principal.last_authenticated_at.isoformat() if principal.last_authenticated_at else "—",
+        )
+    console.print(table)
+
+
+async def _set_identity_admin_scope(client_uid: str, *, enabled: bool) -> McpClientPrincipal:
+    await ensure_schema()
+    async with get_immediate_session() as session:
+        result = await session.execute(
+            select(McpClientPrincipal).where(McpClientPrincipal.client_uid == client_uid)
+        )
+        principal = result.scalars().first()
+        if principal is None:
+            raise ValueError("Unknown MCP client principal; enroll it with ensure_agent_identity first")
+        scopes = [scope for scope in principal.scopes if scope != "mailbox.identity.admin"]
+        if "mailbox.identity.self" not in scopes:
+            scopes.insert(0, "mailbox.identity.self")
+        if enabled:
+            scopes.append("mailbox.identity.admin")
+        principal.scopes = scopes
+        session.add(principal)
+        await session.commit()
+        await session.refresh(principal)
+        return principal
+
+
+@identity_app.command("grant-admin")
+def identity_grant_admin(
+    client_uid: Annotated[str, typer.Argument(help="Existing MCP client principal UID")],
+) -> None:
+    """Grant mailbox identity recovery authority to an enrolled client."""
+    principal = asyncio.run(_set_identity_admin_scope(client_uid.strip(), enabled=True))
+    console.print(
+        f"[green]Granted mailbox.identity.admin[/green] to [bold]{principal.client_uid}[/bold] "
+        f"({principal.display_label or 'unlabelled client'})."
+    )
+
+
+@identity_app.command("revoke-admin")
+def identity_revoke_admin(
+    client_uid: Annotated[str, typer.Argument(help="Existing MCP client principal UID")],
+) -> None:
+    """Remove mailbox identity recovery authority from an enrolled client."""
+    principal = asyncio.run(_set_identity_admin_scope(client_uid.strip(), enabled=False))
+    console.print(
+        f"[yellow]Revoked mailbox.identity.admin[/yellow] from [bold]{principal.client_uid}[/bold]."
+    )
+
+
+async def _revoke_identity_client(client_uid: str) -> tuple[McpClientPrincipal, int]:
+    await ensure_schema()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    async with get_immediate_session() as session:
+        result = await session.execute(
+            select(McpClientPrincipal).where(McpClientPrincipal.client_uid == client_uid)
+        )
+        principal = result.scalars().first()
+        if principal is None or principal.id is None:
+            raise ValueError("Unknown MCP client principal")
+        bindings_result = await session.execute(
+            select(AgentConversationBinding).where(
+                AgentConversationBinding.client_principal_id == principal.id,
+                AgentConversationBinding.status == "active",
+            )
+        )
+        bindings = list(bindings_result.scalars().all())
+        for binding in bindings:
+            binding.status = "revoked"
+            binding.revoked_at = now
+            binding.revocation_reason = "client_principal_revoked"
+            session.add(binding)
+            agent = await session.get(Agent, binding.agent_id)
+            if agent is not None and agent.binding_generation == binding.generation:
+                agent.binding_generation += 1
+                session.add(agent)
+        principal.status = "revoked"
+        principal.revoked_at = now
+        principal.revocation_reason = "revoked_by_local_administrator"
+        session.add(principal)
+        await session.commit()
+        await session.refresh(principal)
+        return principal, len(bindings)
+
+
+@identity_app.command("revoke-client")
+def identity_revoke_client(
+    client_uid: Annotated[str, typer.Argument(help="Existing MCP client principal UID")],
+) -> None:
+    """Revoke a client principal and generation-fence all of its active bindings."""
+    principal, binding_count = asyncio.run(_revoke_identity_client(client_uid.strip()))
+    console.print(
+        f"[red]Revoked MCP client[/red] [bold]{principal.client_uid}[/bold]; "
+        f"invalidated {binding_count} active binding(s)."
+    )
 
 
 @config_app.command("set-port")

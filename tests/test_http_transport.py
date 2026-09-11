@@ -150,9 +150,10 @@ async def test_http_lock_status_endpoint(isolated_env):
 
     storage_root = Path(settings.storage.root).expanduser().resolve()
     storage_root.mkdir(parents=True, exist_ok=True)
-    lock_path = storage_root / ".archive.lock"
+    lock_path = storage_root / ".mailbox-locks" / "lock-status.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.touch()
-    metadata_path = storage_root / ".archive.lock.owner.json"
+    metadata_path = lock_path.parent / f"{lock_path.name}.owner.json"
     metadata_path.write_text(json.dumps({"pid": 999_999, "created_ts": time.time() - 400}), encoding="utf-8")
 
     transport = ASGITransport(app=app)

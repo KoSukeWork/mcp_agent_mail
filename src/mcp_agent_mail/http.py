@@ -1554,14 +1554,21 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     mailbox: '邮箱', client: 'MCP 客户端', expires: '过期时间',
     warning: '批准后, 之前绑定的对话会立即失去该智能体身份。', deny: '拒绝', approve: '批准接管',
     invalid: '确认链接无效或已经过期。', approved: '身份接管已完成。你可以关闭此窗口。',
-    denied: '已拒绝身份接管。你可以关闭此窗口。', failed: '操作失败。'
+    denied: '已拒绝身份接管。你可以关闭此窗口。', failed: '操作失败。',
+    recoveryIntro: '批准前请核对此次管理员身份恢复。', recoveryWarning: '批准后, 之前绑定的对话会立即失去该智能体身份。',
+    recoveryApprove: '批准恢复', recoveryApproved: '身份恢复已完成。你可以关闭此窗口。',
+    recoveryDenied: '已拒绝身份恢复。你可以关闭此窗口。'
   }} : {{
     title: 'Agent identity confirmation', intro: 'Review this identity transfer before approving it.',
     loading: 'Loading protected request details…', mailbox: 'Mailbox', client: 'MCP client', expires: 'Expires',
     warning: 'Approval immediately revokes the previously bound conversation.', deny: 'Deny',
     approve: 'Approve transfer', invalid: 'This confirmation link is invalid or expired.',
     approved: 'Identity transfer completed. You may close this window.',
-    denied: 'Identity transfer denied. You may close this window.', failed: 'The operation failed.'
+    denied: 'Identity transfer denied. You may close this window.', failed: 'The operation failed.',
+    recoveryIntro: 'Review this administrator identity recovery before approving it.',
+    recoveryWarning: 'Approval immediately revokes any previously bound conversation.',
+    recoveryApprove: 'Approve recovery', recoveryApproved: 'Identity recovery completed. You may close this window.',
+    recoveryDenied: 'Identity recovery denied. You may close this window.'
   }};
   for (const [id, key] of [['title','title'],['intro','intro'],['loading','loading'],['project-label','mailbox'],
     ['client-label','client'],['expires-label','expires'],['warning','warning'],['deny','deny'],['approve','approve']]) {{
@@ -1588,6 +1595,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
   document.getElementById('approve').addEventListener('click', () => finish('approve'));
   document.getElementById('deny').addEventListener('click', () => finish('deny'));
   post('details').then((data) => {{
+    if (data.action === 'recover') {{
+      text.approved = text.recoveryApproved; text.denied = text.recoveryDenied;
+      document.getElementById('intro').textContent = text.recoveryIntro;
+      document.getElementById('warning').textContent = text.recoveryWarning;
+      document.getElementById('approve').textContent = text.recoveryApprove;
+    }}
     document.getElementById('loading').hidden = true;
     document.getElementById('project').textContent = data.project;
     document.getElementById('agent').textContent = data.agent_name;
@@ -1639,6 +1652,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     async def approve_identity_confirmation(request_uid: str, request: Request) -> JSONResponse:
         challenge = await _identity_confirmation_challenge(request)
         try:
+            confirmation, _, _, _ = await get_identity_confirmation(request_uid, challenge)
             resolved = await decide_identity_transfer(request_uid, challenge, approve=True)
         except ConversationIdentityError as exc:
             return _identity_confirmation_error(exc)
@@ -1646,7 +1660,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             return JSONResponse({"error": "IDENTITY_BINDING_CONFLICT"}, status_code=409)
         return JSONResponse(
             {
-                "status": "transferred",
+                "status": "recovered" if confirmation.action == "recover" else "transferred",
                 "agent_name": resolved.agent.name,
                 "binding_generation": resolved.binding.generation,
             },

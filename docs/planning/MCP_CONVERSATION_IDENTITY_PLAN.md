@@ -711,3 +711,17 @@ This feature crosses two components:
 2. MCP client adapter: secure client principal, per-conversation metadata injection, browser launch, and confirmation status handling.
 
 Neither half alone satisfies the plan. Server implementation must not claim completion until a supported adapter proves multi-conversation isolation end to end.
+
+## 19. Implemented delivery
+
+The initial cross-component implementation now follows this plan:
+
+- MCP Agent Mail persists authenticated client principals, conversation bindings, confirmation requests, binding generations, and redacted identity audit events in the mailbox database.
+- Trusted registration and `ensure_agent_identity` atomically create or reconnect bindings without exposing an Agent credential to the model. Existing plaintext Agent credentials are migrated to verification-only SHA-256 hashes.
+- Transfer and administrator recovery use native MCP elicitation when available, otherwise a short-lived single-use browser confirmation with challenge, origin, action, and generation validation. Recovery revokes the prior Agent service credential.
+- Every authenticated mailbox write installs a commit-time identity fence. A transfer, recovery, client revocation, mailbox suspension, or generation change therefore rolls back already-started writes from the former owner.
+- Administrator authority is attached to an authenticated client principal rather than a public client label or UID. Local CLI commands list principals, grant or revoke administrator scope, and revoke a client with all of its active bindings.
+- Pi MCP Adapter persists a separate high-entropy client principal in the operating-system credential store for each configured server transport, rotates it if that server is repointed, and combines it with Pi's durable session ID in the reserved trusted `_meta` namespace for direct, proxy, and scripted calls.
+- Pi MCP Adapter removes untrusted attempts to supply the reserved namespace, consumes sensitive browser actions locally, validates the URL as HTTPS or loopback HTTP, and removes the action and URL before any model-facing or UI-facing result processing.
+
+Targeted validation covers in-process and Streamable HTTP metadata propagation, native elicitation, browser confirmation security, simultaneous-conversation isolation, transfer and recovery revocation, commit-time fencing, mailbox trash/restore/purge behavior, client administration, secure-store persistence, direct/proxy/script injection, output redaction, TypeScript type checking, Python linting, and Python type checking. Platform-wide and slow suites remain CI evidence rather than a substitute for these focused security tests.

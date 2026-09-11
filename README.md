@@ -157,16 +157,16 @@ uv run python -m mcp_agent_mail.cli config set-port 9000
 
 What it is
 - A mail-like layer that lets coding agents coordinate asynchronously via MCP tools and resources.
-- Provides identities, inbox/outbox, searchable threads, and advisory file reservations, with human-auditable artifacts in Git.
+- Provides identities, inbox/outbox, searchable threads, advisory file reservations, and database-backed human-auditable activity records.
 
 Why it's useful
 - Prevents agents from stepping on each other with explicit file reservations (leases) for files/globs.
-- Keeps communication out of your token budget by storing messages in a per-project archive.
+- Keeps communication out of your token budget by storing messages in the authoritative mailbox database.
 - Offers quick reads (`resource://inbox/...`, `resource://thread/...`) and macros that bundle common flows.
 
 How to use effectively
 1) Same repository
-   - Register an identity: call `ensure_project`, then `register_agent` using this repo's absolute path as `project_key`.
+   - With a supported MCP adapter, call `ensure_project`, then `ensure_agent_identity` using this repo's absolute path as `project_key`. The adapter supplies trusted per-conversation identity metadata, so no reusable Agent token enters model context.
    - Reserve files before you edit: `file_reservation_paths(project_key, agent_name, ["src/**"], ttl_seconds=3600, exclusive=true)` to signal intent and avoid conflict.
    - Communicate with threads: use `send_message(..., thread_id="FEAT-123")`; check inbox with `fetch_inbox` and acknowledge with `acknowledge_message`.
    - Read fast: `resource://inbox/{Agent}?project=<abs-path>&limit=20&agent_token=<registration_token>` or `resource://thread/{id}?project=<abs-path>&agent=<Agent>&agent_token=<registration_token>&include_bodies=true` unless the current MCP session already authenticated as that agent.
@@ -186,6 +186,16 @@ Common pitfalls
 - Auth errors: if JWT+JWKS is enabled, include a bearer token with a `kid` that matches server JWKS; static bearer is used only when JWT is disabled.
 ```
 <!-- END_AGENT_MAIL_SNIPPET -->
+
+### Persistent MCP conversation identity
+
+- A supported adapter authenticates one stable MCP client principal and injects the current Pi session UUID as trusted request metadata. Agent names remain display labels, never authentication factors.
+- `ensure_agent_identity` creates an Agent only for an unbound conversation and reconnects the same conversation to the same Agent after transport restarts.
+- A different conversation must use `request_agent_identity_transfer`; approval uses native MCP elicitation when available or a short-lived local browser confirmation. Approval increments the Agent binding generation and immediately fences the previous conversation.
+- Local administrators can inspect and authorize existing principals with `mcp-agent-mail identity list-clients`, `identity grant-admin <client_uid>`, `identity revoke-admin <client_uid>`, and `identity revoke-client <client_uid>`.
+- `recover_agent_identity` requires `mailbox.identity.admin`, preserves the Agent ID, revokes any old conversation binding and service credential, and requires the same explicit confirmation as a transfer.
+- Long-term mailbox bindings do not expire from inactivity. Temporary mailbox bindings become suspended in trash, become usable after restore, and are removed with the mailbox at purge. Identity resolution, reconnect, status polling, and confirmation polling do not renew temporary mailbox retention.
+- Clients without trusted conversation metadata can continue through the transitional token path while existing plaintext credentials are migrated to verification-only hashes.
 
 ## Integrating with Beads (dependency-aware task planning)
 

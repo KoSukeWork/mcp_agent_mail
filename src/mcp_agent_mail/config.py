@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit
 
 from decouple import (
     Config as DecoupleConfig,
@@ -275,6 +276,7 @@ class Settings:
     identity_browser_confirmation_enabled: bool
     identity_confirmation_base_url: str
     identity_confirmation_ttl_seconds: int
+    identity_admin_principal_credential_hashes: list[str]
     # Max age (seconds) of an MCP-session-keyed binding entry before it is
     # GC'd from the in-memory binding tables. Bindings are pruned lazily on
     # access; this controls how long an inactive HTTP/stdio session is
@@ -360,6 +362,25 @@ def _enum(value: str, *, default: str, allowed: frozenset[str], key: str) -> str
     raise ConfigError(
         f"{key}: invalid value {value!r}. Expected one of {sorted(allowed)} (or leave unset for default {default!r})."
     )
+
+
+def _identity_confirmation_url(value: str) -> str:
+    """Validate the browser-confirmation origin before any challenge URL is issued."""
+    normalized = value.strip().rstrip("/")
+    parsed = urlsplit(normalized)
+    loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or (parsed.scheme != "https" and not (parsed.scheme == "http" and loopback))
+    ):
+        raise ValueError(
+            "Invalid IDENTITY_CONFIRMATION_BASE_URL: use HTTPS or loopback HTTP without credentials, query, or fragment."
+        )
+    return normalized
 
 
 def _build_settings() -> Settings:
@@ -601,11 +622,17 @@ def _build_settings() -> Settings:
         window_identity_uuid=decouple_config("MCP_AGENT_MAIL_WINDOW_ID", default="").strip(),
         window_identity_ttl_days=_i("MCP_AGENT_MAIL_WINDOW_TTL_DAYS", default=30),
         identity_browser_confirmation_enabled=_b("IDENTITY_BROWSER_CONFIRMATION_ENABLED", default=True),
-        identity_confirmation_base_url=decouple_config(
-            "IDENTITY_CONFIRMATION_BASE_URL",
-            default=f"http://127.0.0.1:{http_settings.port}",
-        ).strip().rstrip("/"),
+        identity_confirmation_base_url=_identity_confirmation_url(
+            decouple_config(
+                "IDENTITY_CONFIRMATION_BASE_URL",
+                default=f"http://127.0.0.1:{http_settings.port}",
+            )
+        ),
         identity_confirmation_ttl_seconds=_i("IDENTITY_CONFIRMATION_TTL_SECONDS", default=300),
+        identity_admin_principal_credential_hashes=_csv(
+            "IDENTITY_ADMIN_PRINCIPAL_CREDENTIAL_HASHES",
+            default="",
+        ),
         session_binding_ttl_seconds=_i("MCP_AGENT_MAIL_SESSION_BINDING_TTL_SECONDS", default=86400),
         auto_retire_stale_agents_enabled=_b("AUTO_RETIRE_STALE_AGENTS_ENABLED", default=True),
         auto_retire_stale_agents_interval_seconds=_i("AUTO_RETIRE_STALE_AGENTS_INTERVAL_SECONDS", default=3600),

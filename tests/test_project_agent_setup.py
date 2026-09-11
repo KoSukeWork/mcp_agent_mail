@@ -584,8 +584,8 @@ async def test_whois_returns_agent_details(isolated_env):
 
 
 @pytest.mark.asyncio
-async def test_whois_with_recent_commits(isolated_env):
-    """whois can include recent commit information."""
+async def test_whois_with_recent_activity(isolated_env):
+    """whois can include recent database-owned activity."""
     server = build_mcp_server()
     async with Client(server) as client:
         await client.call_tool("ensure_project", {"human_key": "/test/setup/commits"})
@@ -600,33 +600,29 @@ async def test_whois_with_recent_commits(isolated_env):
         )
         agent_name = reg_result.data["name"]
 
-        # Query whois with recent commits
+        # Query whois with recent database activity
         whois_result = await client.call_tool(
             "whois",
             {
                 "project_key": "/test/setup/commits",
                 "agent_name": agent_name,
-                "include_recent_commits": True,
-                "commit_limit": 5,
+                "include_recent_activity": True,
+                "activity_limit": 5,
             },
         )
 
-        # Should include recent_commits field (may be empty list)
-        assert "recent_commits" in whois_result.data
+        # The field may contain an empty list when no messages exist yet.
+        assert "recent_activity" in whois_result.data
 
 
 # ============================================================================
-# Test: Git archive profile.json
+# Test: database profile persistence
 # ============================================================================
 
 
 @pytest.mark.asyncio
-async def test_agent_profile_written_to_git_archive(isolated_env):
-    """Agent registration writes profile.json to Git archive.
-
-    Note: This test verifies the agent data is returned correctly.
-    The actual file write to Git archive depends on storage configuration.
-    """
+async def test_agent_profile_persisted_in_database(isolated_env):
+    """Agent registration persists profile data in the authoritative database."""
     server = build_mcp_server()
     async with Client(server) as client:
         await client.call_tool("ensure_project", {"human_key": "/test/setup/archive"})

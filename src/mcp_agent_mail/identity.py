@@ -13,11 +13,13 @@ from typing import Any, cast
 from sqlalchemy import func
 from sqlmodel import select
 
+from .config import get_settings
 from .db import ensure_schema, get_immediate_session, get_session
 from .models import (
     Agent,
     AgentConversationBinding,
     IdentityConfirmationRequest,
+    MailboxEvent,
     McpClientPrincipal,
     Project,
 )
@@ -126,6 +128,21 @@ async def authenticate_client_principal(
     """Authenticate a client credential, enrolling it only at an explicit creation boundary."""
     await ensure_schema()
     now = _utcnow_naive()
+    settings = get_settings()
+    configured_admins: dict[str, str] = {}
+    for configured in settings.identity_admin_principal_credential_hashes:
+        client_uid, separator, credential_hash = configured.partition("=")
+        normalized_hash = credential_hash.strip().lower()
+        if (
+            separator
+            and _OPAQUE_ID_PATTERN.fullmatch(client_uid.strip())
+            and re.fullmatch(r"[0-9a-f]{64}", normalized_hash)
+        ):
+            configured_admins[client_uid.strip().casefold()] = normalized_hash
+    desired_scopes = ["mailbox.identity.self"]
+    configured_admin_hash = configured_admins.get(credentials.client_uid.casefold())
+    if configured_admin_hash and hmac.compare_digest(credentials.credential_hash, configured_admin_hash):
+        desired_scopes.append("mailbox.identity.admin")
     async with get_session() as session:
         result = await session.execute(
             select(McpClientPrincipal).where(
@@ -144,6 +161,7 @@ async def authenticate_client_principal(
                 principal_type="local_key",
                 credential_hash=credentials.credential_hash,
                 display_label=credentials.client_label,
+                scopes=desired_scopes,
                 last_authenticated_at=now,
             )
             session.add(principal)
@@ -162,9 +180,12 @@ async def authenticate_client_principal(
                 "UNTRUSTED_CONVERSATION_CONTEXT",
                 "The MCP client credential does not match the enrolled identity.",
             )
+        desired_scopes = list(dict.fromkeys([*principal.scopes, *desired_scopes]))
         principal.last_authenticated_at = now
         if credentials.client_label and principal.display_label != credentials.client_label:
             principal.display_label = credentials.client_label
+        if principal.scopes != desired_scopes:
+            principal.scopes = desired_scopes
         session.add(principal)
         await session.commit()
         await session.refresh(principal)
@@ -193,6 +214,8 @@ async def resolve_conversation_identity(
         if binding is None:
             return None
         if binding.status != "active":
+            if binding.revocation_reason == "released":
+                return None
             raise ConversationIdentityError(
                 "IDENTITY_SESSION_REVOKED",
                 "This conversation no longer owns its previous Agent identity.",
@@ -293,9 +316,108 @@ async def bind_conversation_identity(
             last_seen_at=now,
         )
         session.add(binding)
+        session.add(
+            MailboxEvent(
+                project_id=project.id,
+                event_type="identity_bound",
+                detail=(
+                    f"agent_id={current_agent.id};principal_id={principal.id};"
+                    f"generation={current_agent.binding_generation}"
+                ),
+            )
+        )
         await session.commit()
         await session.refresh(binding)
         return ResolvedConversationIdentity(principal=principal, binding=binding, agent=current_agent)
+
+
+async def create_bound_agent_identity(
+    project: Project,
+    credentials: ClientConversationCredentials,
+    *,
+    name: str,
+    program: str,
+    model: str,
+    task_description: str,
+    attachments_policy: str,
+) -> ResolvedConversationIdentity:
+    """Atomically create an Agent and bind it to one trusted conversation."""
+    if project.id is None:
+        raise ValueError("Project must have an id before creating a bound Agent identity.")
+    principal = await authenticate_client_principal(credentials, allow_enrollment=True)
+    if principal.id is None:
+        raise ValueError("MCP client principal must have an id before binding an Agent.")
+    await ensure_schema()
+    now = _utcnow_naive()
+    async with get_immediate_session() as session:
+        current_project = await session.get(Project, project.id)
+        if current_project is None or current_project.mailbox_state != "active":
+            raise ConversationIdentityError(
+                "MAILBOX_UNAVAILABLE",
+                "Restore the mailbox from the recycle bin before use",
+            )
+        existing_result = await session.execute(
+            select(AgentConversationBinding).where(
+                AgentConversationBinding.client_principal_id == principal.id,
+                AgentConversationBinding.project_id == project.id,
+                AgentConversationBinding.conversation_binding_hash == credentials.conversation_hash,
+            )
+        )
+        existing_binding = existing_result.scalars().first()
+        if existing_binding is not None and existing_binding.status == "active":
+            raise ConversationIdentityError(
+                "IDENTITY_BINDING_CONFLICT",
+                "This conversation gained an Agent identity while creation was in progress; reconnect instead.",
+            )
+        if existing_binding is not None and existing_binding.revocation_reason != "released":
+            raise ConversationIdentityError(
+                "IDENTITY_SESSION_REVOKED",
+                "This conversation is revoked and cannot create a replacement Agent identity.",
+            )
+        agent = Agent(
+            project_id=project.id,
+            name=name,
+            program=program,
+            model=model,
+            task_description=task_description,
+            attachments_policy=attachments_policy,
+            binding_generation=1,
+        )
+        session.add(agent)
+        await session.flush()
+        if agent.id is None:
+            raise RuntimeError("The database did not assign an Agent id.")
+        if existing_binding is None:
+            binding = AgentConversationBinding(
+                project_id=project.id,
+                agent_id=agent.id,
+                client_principal_id=principal.id,
+                conversation_binding_hash=credentials.conversation_hash,
+                generation=1,
+            )
+        else:
+            # Keep one durable row per conversation while allowing an explicit
+            # release to return that conversation to the unbound state.
+            binding = existing_binding
+            binding.agent_id = agent.id
+            binding.generation = 1
+            binding.status = "active"
+            binding.created_at = now
+            binding.last_seen_at = now
+            binding.revoked_at = None
+            binding.revocation_reason = None
+        session.add(binding)
+        session.add(
+            MailboxEvent(
+                project_id=project.id,
+                event_type="identity_created",
+                detail=f"agent_id={agent.id};principal_id={principal.id};generation=1",
+            )
+        )
+        await session.commit()
+        await session.refresh(agent)
+        await session.refresh(binding)
+        return ResolvedConversationIdentity(principal=principal, binding=binding, agent=agent)
 
 
 async def request_identity_transfer(
@@ -378,6 +500,106 @@ async def request_identity_transfer(
             expires_at=now + timedelta(seconds=max(60, min(ttl_seconds, 1800))),
         )
         session.add(request)
+        session.add(
+            MailboxEvent(
+                project_id=project.id,
+                event_type="identity_confirmation_requested",
+                detail=(
+                    f"action=transfer;agent_id={current_agent.id};principal_id={principal.id};"
+                    f"generation={current_agent.binding_generation}"
+                ),
+            )
+        )
+        await session.commit()
+        await session.refresh(request)
+        return PendingIdentityTransfer(request=request, challenge=challenge)
+
+
+async def request_identity_recovery(
+    project: Project,
+    agent: Agent,
+    credentials: ClientConversationCredentials,
+    *,
+    ttl_seconds: int,
+) -> PendingIdentityTransfer:
+    """Create an administrator-approved recovery request for the current conversation."""
+    if project.id is None or agent.id is None:
+        raise ValueError("Project and Agent must have ids before requesting identity recovery.")
+    if project.mailbox_state != "active":
+        raise ConversationIdentityError(
+            "MAILBOX_UNAVAILABLE",
+            "Restore the mailbox from the recycle bin before use",
+        )
+    principal = await authenticate_client_principal(credentials, allow_enrollment=True)
+    if principal.id is None:
+        raise ValueError("MCP client principal must have an id before requesting recovery.")
+    if "mailbox.identity.admin" not in principal.scopes:
+        raise ConversationIdentityError(
+            "IDENTITY_TRANSFER_CONFIRMATION_REQUIRED",
+            "Agent identity recovery requires a client principal with mailbox.identity.admin authority.",
+        )
+    now = _utcnow_naive()
+    async with get_session() as session:
+        current_agent = await session.get(Agent, agent.id)
+        if current_agent is None or current_agent.project_id != project.id:
+            raise ConversationIdentityError(
+                "IDENTITY_BINDING_CONFLICT",
+                "The requested Agent does not belong to this mailbox.",
+            )
+        owner_result = await session.execute(
+            select(AgentConversationBinding).where(
+                AgentConversationBinding.project_id == project.id,
+                AgentConversationBinding.agent_id == current_agent.id,
+                AgentConversationBinding.status == "active",
+            )
+        )
+        owner = owner_result.scalars().first()
+        if owner is not None and (
+            owner.client_principal_id == principal.id
+            and owner.conversation_binding_hash == credentials.conversation_hash
+            and owner.generation == current_agent.binding_generation
+        ):
+            raise ConversationIdentityError(
+                "IDENTITY_BINDING_CONFLICT",
+                "This administrator conversation already owns the requested Agent identity.",
+            )
+        target_result = await session.execute(
+            select(AgentConversationBinding).where(
+                AgentConversationBinding.client_principal_id == principal.id,
+                AgentConversationBinding.project_id == project.id,
+                AgentConversationBinding.conversation_binding_hash == credentials.conversation_hash,
+                AgentConversationBinding.status == "active",
+            )
+        )
+        if target_result.scalars().first() is not None:
+            raise ConversationIdentityError(
+                "IDENTITY_BINDING_CONFLICT",
+                "This administrator conversation already owns another active Agent identity in the mailbox.",
+            )
+        challenge = secrets.token_urlsafe(32)
+        request = IdentityConfirmationRequest(
+            request_uid=secrets.token_urlsafe(24),
+            action="recover",
+            requesting_principal_id=principal.id,
+            project_id=project.id,
+            agent_id=current_agent.id,
+            source_binding_id=owner.id if owner is not None else None,
+            target_conversation_binding_hash=credentials.conversation_hash,
+            expected_binding_generation=current_agent.binding_generation,
+            challenge_hash=hashlib.sha256(challenge.encode("utf-8")).hexdigest(),
+            expires_at=now + timedelta(seconds=max(60, min(ttl_seconds, 1800))),
+        )
+        session.add(request)
+        session.add(
+            MailboxEvent(
+                project_id=project.id,
+                event_type="identity_confirmation_requested",
+                detail=(
+                    f"action=recover;agent_id={current_agent.id};principal_id={principal.id};"
+                    f"generation={current_agent.binding_generation}"
+                ),
+            )
+        )
         await session.commit()
         await session.refresh(request)
         return PendingIdentityTransfer(request=request, challenge=challenge)
@@ -461,13 +683,27 @@ async def decide_identity_transfer(
             request.decided_at = now
             request.decided_by_principal_id = request.requesting_principal_id
             session.add(request)
+            session.add(
+                MailboxEvent(
+                    project_id=request.project_id,
+                    event_type="identity_confirmation_denied",
+                    detail=(
+                        f"action={request.action};agent_id={request.agent_id};"
+                        f"generation={request.expected_binding_generation}"
+                    ),
+                )
+            )
             await session.commit()
             return None
         project = await session.get(Project, request.project_id)
         agent = await session.get(Agent, request.agent_id)
         principal = await session.get(McpClientPrincipal, request.requesting_principal_id)
-        source = await session.get(AgentConversationBinding, request.source_binding_id)
-        if project is None or agent is None or principal is None or source is None:
+        source = (
+            await session.get(AgentConversationBinding, request.source_binding_id)
+            if request.source_binding_id is not None
+            else None
+        )
+        if project is None or agent is None or principal is None:
             raise ConversationIdentityError(
                 "IDENTITY_BINDING_CONFLICT",
                 "The identity transfer target no longer exists.",
@@ -482,12 +718,23 @@ async def decide_identity_transfer(
                 "CLIENT_PRINCIPAL_REVOKED",
                 "The requesting MCP client identity has been revoked.",
             )
+        source_is_current = bool(
+            source is not None
+            and source.status == "active"
+            and source.agent_id == agent.id
+            and source.generation == request.expected_binding_generation
+        )
+        is_admin_recovery = request.action == "recover" and "mailbox.identity.admin" in principal.scopes
+        transfer_is_authorized = bool(
+            request.action == "transfer"
+            and source_is_current
+            and source is not None
+            and source.client_principal_id == principal.id
+        )
+        recovery_is_authorized = bool(is_admin_recovery and (source is None or source_is_current))
         if (
-            source.status != "active"
-            or source.agent_id != agent.id
-            or source.generation != request.expected_binding_generation
-            or agent.binding_generation != request.expected_binding_generation
-            or source.client_principal_id != principal.id
+            agent.binding_generation != request.expected_binding_generation
+            or not (transfer_is_authorized or recovery_is_authorized)
         ):
             raise ConversationIdentityError(
                 "IDENTITY_SESSION_REVOKED",
@@ -508,11 +755,12 @@ async def decide_identity_transfer(
                 "The target conversation already owns an active Agent identity.",
             )
         next_generation = agent.binding_generation + 1
-        source.status = "revoked"
-        source.revoked_at = now
-        source.revocation_reason = "transferred"
-        session.add(source)
-        await session.flush()
+        if source is not None:
+            source.status = "revoked"
+            source.revoked_at = now
+            source.revocation_reason = "recovered" if request.action == "recover" else "transferred"
+            session.add(source)
+            await session.flush()
         if target is None:
             target = AgentConversationBinding(
                 project_id=project.id,
@@ -520,24 +768,39 @@ async def decide_identity_transfer(
                 client_principal_id=principal.id,
                 conversation_binding_hash=request.target_conversation_binding_hash,
                 generation=next_generation,
-                transferred_from_binding_id=source.id,
+                transferred_from_binding_id=source.id if source is not None else None,
                 last_seen_at=now,
             )
         else:
-            target.agent_id = agent.id
+            target.agent_id = cast(int, agent.id)
             target.generation = next_generation
             target.status = "active"
             target.last_seen_at = now
             target.revoked_at = None
             target.revocation_reason = None
-            target.transferred_from_binding_id = source.id
+            target.transferred_from_binding_id = source.id if source is not None else None
         agent.binding_generation = next_generation
+        if request.action == "recover":
+            agent.registration_token = None
+            agent.service_credential_hash = None
+            agent.service_credential_version += 1
+            agent.service_credential_rotated_at = now
         request.status = "consumed"
         request.decided_at = now
         request.decided_by_principal_id = principal.id
         session.add(target)
         session.add(agent)
         session.add(request)
+        session.add(
+            MailboxEvent(
+                project_id=request.project_id,
+                event_type="identity_recovered" if request.action == "recover" else "identity_transferred",
+                detail=(
+                    f"agent_id={agent.id};principal_id={principal.id};generation={next_generation};"
+                    f"service_credential_revoked={str(request.action == 'recover').lower()}"
+                ),
+            )
+        )
         await session.commit()
         await session.refresh(target)
         await session.refresh(agent)
@@ -575,6 +838,16 @@ async def release_conversation_identity(
         agent.binding_generation += 1
         session.add(binding)
         session.add(agent)
+        session.add(
+            MailboxEvent(
+                project_id=project.id,
+                event_type="identity_released",
+                detail=(
+                    f"agent_id={agent.id};principal_id={resolved.principal.id};"
+                    f"generation={agent.binding_generation}"
+                ),
+            )
+        )
         await session.commit()
         await session.refresh(agent)
         return agent, agent.binding_generation

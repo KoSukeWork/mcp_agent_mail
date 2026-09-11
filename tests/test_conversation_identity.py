@@ -11,8 +11,16 @@ from mcp.types import RequestParams
 from sqlmodel import select
 
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.config import get_settings
-from mcp_agent_mail.db import ensure_schema, get_session
+from mcp_agent_mail.config import clear_settings_cache, get_settings
+from mcp_agent_mail.db import (
+    IdentityWriteFence,
+    IdentityWriteFenceError,
+    add_identity_write_fence,
+    begin_identity_write_fence_scope,
+    end_identity_write_fence_scope,
+    ensure_schema,
+    get_session,
+)
 from mcp_agent_mail.http import build_http_app
 from mcp_agent_mail.identity import (
     IDENTITY_META_KEY,
@@ -26,14 +34,16 @@ from mcp_agent_mail.identity import (
     list_client_agent_bindings,
     parse_identity_metadata,
     release_conversation_identity,
+    request_identity_recovery,
     request_identity_transfer,
     resolve_conversation_identity,
 )
-from mcp_agent_mail.lifecycle import purge_mailbox
+from mcp_agent_mail.lifecycle import configure_mailbox, purge_mailbox
 from mcp_agent_mail.models import (
     Agent,
     AgentConversationBinding,
     IdentityConfirmationRequest,
+    MailboxEvent,
     McpClientPrincipal,
     Project,
 )
@@ -127,6 +137,22 @@ def test_parse_identity_metadata_rejects_model_controlled_or_invalid_data():
     )
     with pytest.raises(ConversationIdentityError, match="valid client identifier"):
         parse_identity_metadata(invalid)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://confirmation.example/mcp",
+        "https://user:password@confirmation.example/mcp",
+        "https://confirmation.example/mcp?challenge=wrong-place",
+    ],
+)
+def test_identity_confirmation_base_url_rejects_unsafe_values(isolated_env, monkeypatch, base_url):
+    monkeypatch.setenv("IDENTITY_CONFIRMATION_BASE_URL", base_url)
+    clear_settings_cache()
+
+    with pytest.raises(ValueError, match="Invalid IDENTITY_CONFIRMATION_BASE_URL"):
+        get_settings()
 
 
 @pytest.mark.asyncio
@@ -281,6 +307,72 @@ async def test_register_agent_uses_persistent_request_metadata_across_mcp_sessio
 
 
 @pytest.mark.asyncio
+async def test_existing_plaintext_token_is_hashed_after_trusted_binding_enrollment(isolated_env):
+    server = build_mcp_server()
+    arguments = {
+        "project_key": "/identity/token-migration",
+        "program": "pi",
+        "model": "test",
+        "name": "CoralBeacon",
+    }
+    async with Client(server) as client:
+        await client.call_tool("ensure_project", {"human_key": "/identity/token-migration"})
+        legacy = await client.call_tool("register_agent", arguments)
+        legacy_token = legacy.data["registration_token"]
+
+    async with Client(server) as enrolling_client:
+        migrated_raw = await enrolling_client.session.call_tool(
+            "register_agent",
+            {**arguments, "registration_token": legacy_token},
+            meta=identity_meta(),
+        )
+        migrated = structured_result(migrated_raw)
+
+    assert "registration_token" not in migrated
+    async with get_session() as session:
+        stored_agent = (
+            await session.execute(select(Agent).where(Agent.name == "CoralBeacon"))
+        ).scalars().one()
+        assert stored_agent.registration_token is None
+        assert stored_agent.service_credential_hash is not None
+        assert stored_agent.service_credential_hash != legacy_token
+        assert stored_agent.service_credential_version == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_agent_identity_creates_then_reconnects_without_model_token(isolated_env):
+    server = build_mcp_server()
+    arguments = {
+        "project_key": "/identity/ensure",
+        "program": "pi",
+        "model": "test",
+        "name_hint": "CoralBeacon",
+    }
+    async with Client(server) as client:
+        await client.call_tool("ensure_project", {"human_key": "/identity/ensure"})
+        created_raw = await client.session.call_tool(
+            "ensure_agent_identity",
+            arguments,
+            meta=identity_meta(),
+        )
+        created = structured_result(created_raw)
+
+    async with Client(server) as reconnected_client:
+        reconnected_raw = await reconnected_client.session.call_tool(
+            "ensure_agent_identity",
+            arguments,
+            meta=identity_meta(),
+        )
+        reconnected = structured_result(reconnected_raw)
+
+    assert created["identity_action"] == "created"
+    assert reconnected["identity_action"] == "reconnected"
+    assert created["id"] == reconnected["id"]
+    assert "registration_token" not in created
+    assert "registration_token" not in reconnected
+
+
+@pytest.mark.asyncio
 async def test_approved_transfer_revokes_old_conversation_and_increments_generation(isolated_env):
     project, agent = await create_project_and_agent()
     old_credentials = credentials()
@@ -318,6 +410,165 @@ async def test_approved_transfer_revokes_old_conversation_and_increments_generat
     current = await resolve_conversation_identity(project, new_credentials)
     assert current is not None
     assert current.binding.id == transferred.binding.id
+    async with get_session() as session:
+        events = (
+            await session.execute(select(MailboxEvent).where(MailboxEvent.project_id == project.id))
+        ).scalars().all()
+    assert {event.event_type for event in events} >= {
+        "identity_bound",
+        "identity_confirmation_requested",
+        "identity_transferred",
+    }
+    audit_text = "\n".join(event.detail for event in events)
+    assert pending.challenge not in audit_text
+    assert old_credentials.client_secret not in audit_text
+    assert new_credentials.conversation_uid not in audit_text
+
+
+@pytest.mark.asyncio
+async def test_native_mcp_elicitation_approves_transfer_without_browser_action(isolated_env):
+    project, agent = await create_project_and_agent()
+    await bind_conversation_identity(project, agent, credentials(), allow_client_enrollment=True)
+    prompts: list[str] = []
+
+    async def approve(message, response_type, params, context):
+        prompts.append(message)
+        assert response_type is not None
+        assert "Approve transfer" in str(params.requestedSchema)
+        assert "Deny" in str(params.requestedSchema)
+        assert context is not None
+        return {"value": "Approve transfer"}
+
+    server = build_mcp_server()
+    async with Client(server, elicitation_handler=approve) as client:
+        result_raw = await client.session.call_tool(
+            "request_agent_identity_transfer",
+            {"project_key": project.human_key, "agent_name": agent.name},
+            meta=identity_meta(conversation_uid="conversation-00000002"),
+        )
+        result = structured_result(result_raw)
+
+    assert prompts
+    assert result["status"] == "transferred"
+    assert result["binding_generation"] == 2
+    assert "_client_action" not in result
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_preserves_trusted_conversation_metadata(isolated_env):
+    project, agent = await create_project_and_agent()
+    await bind_conversation_identity(project, agent, credentials(), allow_client_enrollment=True)
+    app = build_http_app(get_settings())
+    request = {
+        "jsonrpc": "2.0",
+        "id": "identity-http-1",
+        "method": "tools/call",
+        "params": {
+            "name": "identity_status",
+            "arguments": {"project_key": project.human_key},
+            "_meta": identity_meta(),
+        },
+    }
+
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://127.0.0.1") as client,
+    ):
+        response = await client.post(
+            get_settings().http.path,
+            headers={"Accept": "application/json, text/event-stream"},
+            json=request,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    result = payload["result"]["structuredContent"]
+    result = result.get("result", result)
+    assert result["bound"] is True
+    assert result["binding_state"] == "active"
+    assert result["agent"]["id"] == agent.id
+
+
+@pytest.mark.asyncio
+async def test_release_tool_can_atomically_revoke_its_current_binding(isolated_env):
+    project, agent = await create_project_and_agent()
+    identity = credentials()
+    await bind_conversation_identity(project, agent, identity, allow_client_enrollment=True)
+    server = build_mcp_server()
+
+    async with Client(server) as client:
+        released_raw = await client.session.call_tool(
+            "release_agent_identity",
+            {"project_key": project.human_key},
+            meta=identity_meta(),
+        )
+        released = structured_result(released_raw)
+
+    assert released["released"] is True
+    assert released["binding_generation"] == 2
+    assert await resolve_conversation_identity(project, identity) is None
+
+    async with Client(server) as client:
+        rebound_raw = await client.session.call_tool(
+            "ensure_agent_identity",
+            {
+                "project_key": project.human_key,
+                "program": "pi",
+                "model": "test",
+                "name_hint": "SilverHarbor",
+            },
+            meta=identity_meta(),
+        )
+        rebound = structured_result(rebound_raw)
+
+    assert rebound["id"] != agent.id
+    assert rebound["name"] == "SilverHarbor"
+    assert rebound["credential_managed_by_mcp"] is True
+    assert "registration_token" not in rebound
+
+
+@pytest.mark.asyncio
+async def test_database_commit_fence_rejects_write_after_concurrent_transfer(isolated_env):
+    project, agent = await create_project_and_agent()
+    assert project.id is not None
+    assert agent.id is not None
+    old_credentials = credentials()
+    initial = await bind_conversation_identity(project, agent, old_credentials, allow_client_enrollment=True)
+    assert initial.principal.id is not None
+    new_credentials = credentials(conversation_uid="conversation-beta-123456")
+    outer_token = begin_identity_write_fence_scope()
+    try:
+        add_identity_write_fence(
+            IdentityWriteFence(
+                principal_id=initial.principal.id,
+                project_id=project.id,
+                agent_id=agent.id,
+                conversation_binding_hash=old_credentials.conversation_hash,
+                generation=initial.binding.generation,
+            )
+        )
+        async with get_session() as session:
+            stale_agent = await session.get(Agent, agent.id)
+            assert stale_agent is not None
+            stale_agent.task_description = "must roll back"
+            session.add(stale_agent)
+
+            transfer_scope = begin_identity_write_fence_scope()
+            try:
+                pending = await request_identity_transfer(project, agent, new_credentials, ttl_seconds=300)
+                await decide_identity_transfer(pending.request.request_uid, pending.challenge, approve=True)
+            finally:
+                end_identity_write_fence_scope(transfer_scope)
+
+            with pytest.raises(IdentityWriteFenceError):
+                await session.commit()
+    finally:
+        end_identity_write_fence_scope(outer_token)
+
+    async with get_session() as session:
+        stored_agent = await session.get(Agent, agent.id)
+        assert stored_agent is not None
+        assert stored_agent.task_description == ""
 
 
 @pytest.mark.asyncio
@@ -396,7 +647,7 @@ async def test_browser_confirmation_requires_same_origin_and_one_time_challenge(
 
 
 @pytest.mark.asyncio
-async def test_release_preserves_agent_and_revokes_conversation(isolated_env):
+async def test_release_preserves_agent_and_leaves_conversation_unbound(isolated_env):
     project, agent = await create_project_and_agent()
     identity = credentials()
     await bind_conversation_identity(project, agent, identity, allow_client_enrollment=True)
@@ -405,9 +656,7 @@ async def test_release_preserves_agent_and_revokes_conversation(isolated_env):
 
     assert released_agent.id == agent.id
     assert next_generation == 2
-    with pytest.raises(ConversationIdentityError) as raised:
-        await resolve_conversation_identity(project, identity)
-    assert raised.value.error_type == "IDENTITY_SESSION_REVOKED"
+    assert await resolve_conversation_identity(project, identity) is None
     principal, bindings = await list_client_agent_bindings(project, identity)
     assert principal.status == "active"
     assert len(bindings) == 1
@@ -477,6 +726,25 @@ async def test_temporary_trash_suspends_status_and_purge_removes_identity_record
     assert status["binding_state"] == "suspended"
 
     assert project.id is not None
+    await configure_mailbox(project.id, action="restore", now=now)
+    async with Client(server) as client:
+        restored_raw = await client.session.call_tool(
+            "identity_status",
+            {"project_key": project.human_key},
+            meta=identity_meta(),
+        )
+        restored = structured_result(restored_raw)
+    assert restored["binding_state"] == "active"
+
+    async with get_session() as session:
+        stored_project = await session.get(Project, project.id)
+        assert stored_project is not None
+        stored_project.mailbox_state = "trash"
+        stored_project.trashed_at = now - timedelta(days=8)
+        stored_project.purge_after = now - timedelta(days=1)
+        session.add(stored_project)
+        await session.commit()
+
     removed = await purge_mailbox(get_settings(), project.id, now=now, force=True)
 
     assert removed is True
@@ -486,3 +754,67 @@ async def test_temporary_trash_suspends_status_and_purge_removes_identity_record
         principals = (await session.execute(select(McpClientPrincipal))).scalars().all()
         assert len(principals) == 1
         assert principals[0].status == "active"
+
+
+@pytest.mark.asyncio
+async def test_identity_admin_can_recover_agent_from_another_client(isolated_env, monkeypatch):
+    project, agent = await create_project_and_agent()
+    old_credentials = credentials()
+    await bind_conversation_identity(project, agent, old_credentials, allow_client_enrollment=True)
+    async with get_session() as session:
+        stored_agent = await session.get(Agent, agent.id)
+        assert stored_agent is not None
+        stored_agent.service_credential_hash = "f" * 64
+        stored_agent.service_credential_version = 1
+        session.add(stored_agent)
+        await session.commit()
+    admin_credentials = ClientConversationCredentials(
+        client_uid="administrator-client-000001",
+        client_secret="E" * 43,
+        conversation_uid="administrator-conversation-01",
+        client_label="Identity administrator",
+        browser_confirmation=True,
+    )
+    monkeypatch.setenv(
+        "IDENTITY_ADMIN_PRINCIPAL_CREDENTIAL_HASHES",
+        f"{admin_credentials.client_uid}={admin_credentials.credential_hash}",
+    )
+    clear_settings_cache()
+    pending = await request_identity_recovery(
+        project,
+        agent,
+        admin_credentials,
+        ttl_seconds=300,
+    )
+    app = build_http_app(get_settings())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        page = await client.get(f"/identity/confirm/{pending.request.request_uid}")
+        details = await client.post(
+            f"/api/identity/confirm/{pending.request.request_uid}/details",
+            headers={"Origin": "http://test"},
+            json={"challenge": pending.challenge},
+        )
+
+    assert page.status_code == 200
+    assert "recoveryIntro" in page.text
+    assert details.status_code == 200
+    assert details.json()["action"] == "recover"
+
+    recovered = await decide_identity_transfer(
+        pending.request.request_uid,
+        pending.challenge,
+        approve=True,
+    )
+
+    assert recovered is not None
+    assert recovered.principal.client_uid == admin_credentials.client_uid
+    assert recovered.agent.id == agent.id
+    assert recovered.agent.binding_generation == 2
+    assert recovered.agent.service_credential_hash is None
+    assert recovered.agent.service_credential_version == 2
+    with pytest.raises(ConversationIdentityError) as old_error:
+        await resolve_conversation_identity(project, old_credentials)
+    assert old_error.value.error_type == "IDENTITY_SESSION_REVOKED"
+    current = await resolve_conversation_identity(project, admin_credentials)
+    assert current is not None
+    assert current.agent.id == agent.id

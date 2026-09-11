@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import logging
 import random
 import re
@@ -32,7 +33,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Final, TypeVar, cast
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError, TimeoutError as SATimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -45,6 +46,95 @@ _logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityWriteFence:
+    """Trusted conversation ownership that must still hold when a write commits."""
+
+    principal_id: int
+    project_id: int
+    agent_id: int
+    conversation_binding_hash: str
+    generation: int
+
+
+class IdentityWriteFenceError(RuntimeError):
+    """Raised when an authenticated conversation loses ownership before commit."""
+
+
+_identity_write_fences: contextvars.ContextVar[tuple[IdentityWriteFence, ...]] = contextvars.ContextVar(
+    "identity_write_fences",
+    default=(),
+)
+
+
+def begin_identity_write_fence_scope() -> contextvars.Token[tuple[IdentityWriteFence, ...]]:
+    """Start an isolated fence scope for one MCP tool invocation."""
+    return _identity_write_fences.set(())
+
+
+def end_identity_write_fence_scope(token: contextvars.Token[tuple[IdentityWriteFence, ...]]) -> None:
+    """Restore the caller's prior identity fence scope."""
+    _identity_write_fences.reset(token)
+
+
+def add_identity_write_fence(fence: IdentityWriteFence) -> None:
+    """Require ``fence`` for subsequent database commits in this async context."""
+    existing = _identity_write_fences.get()
+    if fence not in existing:
+        _identity_write_fences.set((*existing, fence))
+
+
+class FencedAsyncSession(AsyncSession):
+    """AsyncSession that revalidates trusted conversation ownership at commit."""
+
+    async def commit(self) -> None:
+        fences = _identity_write_fences.get()
+        if fences:
+            # Flush the protected write before checking ownership. On SQLite
+            # this acquires the writer lock; on PostgreSQL the SELECT below
+            # holds a share lock on the binding rows until this transaction
+            # commits. Both close the check/commit takeover race.
+            await self.flush()
+        for fence in fences:
+            # Query committed/current database state without ORM autoflush.
+            # Lifecycle and identity tools may intentionally revoke the mailbox
+            # or binding they authenticated with in this same transaction.
+            connection = await self.connection()
+            dialect_name = self.get_bind().dialect.name
+            lock_clause = " FOR SHARE" if dialect_name == "postgresql" else ""
+            result = await connection.execute(
+                text(
+                    "SELECT 1 FROM agent_conversation_bindings b "
+                    "JOIN agents a ON a.id = b.agent_id "
+                    "JOIN projects p ON p.id = b.project_id "
+                    "JOIN mcp_client_principals c ON c.id = b.client_principal_id "
+                    "WHERE b.client_principal_id = :principal_id "
+                    "AND b.project_id = :project_id "
+                    "AND b.agent_id = :agent_id "
+                    "AND b.conversation_binding_hash = :conversation_binding_hash "
+                    "AND b.generation = :generation "
+                    "AND b.status = 'active' "
+                    "AND a.binding_generation = :generation "
+                    "AND p.mailbox_state = 'active' "
+                    "AND c.status = 'active'"
+                    + lock_clause
+                ),
+                {
+                    "principal_id": fence.principal_id,
+                    "project_id": fence.project_id,
+                    "agent_id": fence.agent_id,
+                    "conversation_binding_hash": fence.conversation_binding_hash,
+                    "generation": fence.generation,
+                },
+            )
+            if result.first() is None:
+                await self.rollback()
+                raise IdentityWriteFenceError(
+                    "The Agent identity owner changed before the database write could commit."
+                )
+        await super().commit()
 _schema_ready = False
 _schema_lock: asyncio.Lock | None = None
 
@@ -583,7 +673,7 @@ def init_engine(settings: Settings | None = None) -> None:
     engine = _build_engine(resolved_settings.database)
     install_query_hooks(engine)
     _engine = engine
-    _session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    _session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=FencedAsyncSession)
 
 
 def get_engine() -> AsyncEngine:
@@ -810,6 +900,25 @@ def _migrate_sqlite_agent_identity(connection: Connection) -> None:
     for name, ddl in definitions.items():
         if name not in columns:
             connection.exec_driver_sql(f"ALTER TABLE agents ADD COLUMN {name} {ddl}")
+    legacy_credentials = connection.exec_driver_sql(
+        "SELECT id, registration_token FROM agents "
+        "WHERE registration_token IS NOT NULL AND registration_token != '' "
+        "AND service_credential_hash IS NULL"
+    ).all()
+    for agent_id, registration_token in legacy_credentials:
+        credential_hash = hashlib.sha256(str(registration_token).encode("utf-8")).hexdigest()
+        connection.exec_driver_sql(
+            "UPDATE agents SET service_credential_hash = ?, "
+            "service_credential_version = CASE WHEN service_credential_version < 1 THEN 1 "
+            "ELSE service_credential_version END, "
+            "service_credential_rotated_at = COALESCE(service_credential_rotated_at, CURRENT_TIMESTAMP), "
+            "registration_token = NULL WHERE id = ?",
+            (credential_hash, agent_id),
+        )
+    connection.exec_driver_sql(
+        "UPDATE agents SET registration_token = NULL "
+        "WHERE service_credential_hash IS NOT NULL AND registration_token IS NOT NULL"
+    )
 
 
 def _setup_mailbox_lifecycle(connection: Connection) -> None:
