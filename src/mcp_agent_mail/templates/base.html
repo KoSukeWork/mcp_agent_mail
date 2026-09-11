@@ -5,6 +5,28 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}{{ _("Agent Mail") }}{% endblock %}</title>
+    <meta name="csrf-token" content="{{ mail_ui_csrf() if mail_ui_csrf is defined else '' }}" />
+    <script>
+      (function () {
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+          const options = init ? { ...init } : {};
+          const method = String(options.method || 'GET').toUpperCase();
+          if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            const token = meta && meta.getAttribute('content');
+            if (token) {
+              const headers = new Headers(options.headers || {});
+              if (!headers.has('X-CSRF-Token')) {
+                headers.set('X-CSRF-Token', token);
+              }
+              options.headers = headers;
+            }
+          }
+          return originalFetch(input, options);
+        };
+      })();
+    </script>
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -2221,6 +2243,18 @@
           <!-- Right side actions -->
           <div class="app-header-actions">
             {% block header_actions %}{% endblock %}
+
+            {% if mail_ui_username is defined and mail_ui_username() %}
+            <form method="post" action="/mail/logout" class="inline-flex">
+              <input type="hidden" name="csrf_token" value="{{ mail_ui_csrf() if mail_ui_csrf is defined else '' }}">
+              <button type="submit"
+                      class="h-9 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-sm font-semibold text-slate-700 dark:text-slate-200"
+                      data-tippy-content="{{ _('Sign out') }}"
+                      aria-label="{{ _('Sign out') }}">
+                {{ mail_ui_username() }} · {{ _("Sign out") }}
+              </button>
+            </form>
+            {% endif %}
 
             <!-- Help Button -->
             <button onclick="window.restartTutorial()"

@@ -62,6 +62,22 @@ from .storage import (
     get_lock_telemetry,
     write_file_reservation_record,
 )
+from .ui_auth import (
+    MailUIAuthMiddleware,
+    clear_login_csrf_cookie,
+    clear_mail_ui_session_cookie,
+    credentials_configured,
+    current_mail_ui_csrf,
+    current_mail_ui_username,
+    is_mail_ui_path,
+    issue_mail_ui_session,
+    new_login_csrf_token,
+    origin_is_same_site,
+    sanitize_mail_next_path,
+    set_login_csrf_cookie,
+    verify_login_csrf,
+    verify_mail_ui_credentials,
+)
 
 
 async def _project_slug_from_id(pid: int | None) -> str | None:
@@ -518,6 +534,8 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/health/") or request.url.path == "/api/health":
             return await call_next(request)
         if request.url.path.startswith(("/identity/confirm/", "/api/identity/confirm/")):
+            return await call_next(request)
+        if is_mail_ui_path(request.url.path):
             return await call_next(request)
         if _localhost_bypass_allowed(
             request,
@@ -1346,7 +1364,18 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         project_id = None
         parts = request.url.path.strip("/").split("/")
-        reserved = {"api", "projects", "mailboxes", "activity", "unified-inbox", "archive", "static", "assets"}
+        reserved = {
+            "api",
+            "projects",
+            "mailboxes",
+            "activity",
+            "unified-inbox",
+            "archive",
+            "static",
+            "assets",
+            "login",
+            "logout",
+        }
         if len(parts) >= 2 and parts[0] == "mail" and parts[1] not in reserved:
             await ensure_schema(settings)
             async with get_session() as session:
@@ -1457,6 +1486,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             allow_localhost=bool(getattr(settings.http, "allow_localhost_unauthenticated", False)),
             jwt_enabled=bool(getattr(settings.http, "jwt_enabled", False)),
         )
+
+    app_mail_ui = cast(Any, fastapi_app)
+    app_mail_ui.add_middleware(MailUIAuthMiddleware, settings=settings)
 
     # Optional CORS
     if settings.cors.enabled:
@@ -1935,6 +1967,8 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         )
         env.globals["_"] = cast(Any, gettext)
         env.globals["current_locale"] = cast(Any, get_interface_locale)
+        env.globals["mail_ui_username"] = cast(Any, current_mail_ui_username)
+        env.globals["mail_ui_csrf"] = cast(Any, current_mail_ui_csrf)
         # HTML sanitizer (allow safe images and limited CSS)
         _css_sanitizer = (
             CSSSanitizer(
@@ -2213,6 +2247,63 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 logging.error("Error fetching unified inbox data", exc_info=True, extra={"error": str(exc)})
 
             return {"messages": messages, "projects": projects}
+
+        @fastapi_app.get("/mail/login", response_class=HTMLResponse)
+        async def mail_login_page(request: Request) -> HTMLResponse:
+            csrf_token = new_login_csrf_token()
+            html = await _render(
+                "mail_login.html",
+                csrf_token=csrf_token,
+                next_path=sanitize_mail_next_path(request.query_params.get("next")),
+                error_message=None,
+                login_configured=credentials_configured(settings),
+                mail_ui_username_value=(settings.http.mail_ui_username or "operator"),
+            )
+            set_login_csrf_cookie(html, csrf_token, request=request)
+            html.headers["Cache-Control"] = "no-store"
+            return html
+
+        @fastapi_app.post("/mail/login")
+        async def mail_login_submit(request: Request) -> Response:
+            form = await request.form()
+            username = str(form.get("username") or "")
+            password = str(form.get("password") or "")
+            next_path = sanitize_mail_next_path(str(form.get("next") or "/mail"))
+            csrf_token = str(form.get("csrf_token") or "")
+            origin_ok = origin_is_same_site(request)
+            csrf_ok = verify_login_csrf(request, csrf_token)
+            credentials_ok = verify_mail_ui_credentials(settings, username, password)
+            if not origin_ok or not csrf_ok or not credentials_ok:
+                fresh_csrf = new_login_csrf_token()
+                html = await _render(
+                    "mail_login.html",
+                    csrf_token=fresh_csrf,
+                    next_path=next_path,
+                    error_message=gettext("Invalid username or password."),
+                    login_configured=credentials_configured(settings),
+                    mail_ui_username_value=(settings.http.mail_ui_username or "operator"),
+                )
+                set_login_csrf_cookie(html, fresh_csrf, request=request)
+                html.headers["Cache-Control"] = "no-store"
+                return html
+            redirect = RedirectResponse(next_path, status_code=status.HTTP_303_SEE_OTHER)
+            issue_mail_ui_session(
+                redirect,
+                request=request,
+                settings=settings,
+                username=(settings.http.mail_ui_username or "operator"),
+            )
+            clear_login_csrf_cookie(redirect)
+            redirect.headers["Cache-Control"] = "no-store"
+            return redirect
+
+        @fastapi_app.post("/mail/logout")
+        async def mail_logout() -> Response:
+            redirect = RedirectResponse("/mail/login", status_code=status.HTTP_303_SEE_OTHER)
+            clear_mail_ui_session_cookie(redirect)
+            clear_login_csrf_cookie(redirect)
+            redirect.headers["Cache-Control"] = "no-store"
+            return redirect
 
         @fastapi_app.get("/mail", response_class=HTMLResponse)
         async def mail_unified_inbox(category: str = "all") -> HTMLResponse:

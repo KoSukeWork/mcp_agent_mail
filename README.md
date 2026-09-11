@@ -395,8 +395,10 @@ uv run uvicorn mcp_agent_mail.http:create_app --factory --host 127.0.0.1 --port 
 ```
 
 Auth notes:
-- GET pages in the UI are not gated by the RBAC middleware (it classifies POSTed MCP calls only), but if you set a bearer token the separate BearerAuth middleware protects all routes by default.
-- For local dev, set `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED=true` (and optionally `HTTP_BEARER_TOKEN`), so localhost can load the UI without headers.
+- GET pages in the UI are not gated by the RBAC middleware (it classifies POSTed MCP calls only).
+- `HTTP_BEARER_TOKEN` and JWT protect MCP HTTP routes. They do not gate `/mail`.
+- The human mail UI uses an independent cookie session. Set `MAIL_UI_PASSWORD` and open `/mail/login`.
+- For local MCP clients without a header, set `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED=true`.
 - Health endpoints are always open at `/health/*`.
 
 ### Routes and what you can do
@@ -666,12 +668,13 @@ Once messages exist, visit `/mail`, click your project, then open an agent inbox
 ### Security considerations
 
 - HTML sanitization: Only a conservative set of tags/attributes are allowed; CSS is filtered. Links are limited to http/https/mailto/data.
-- Auth: Use bearer token or JWT when exposing beyond localhost. For local dev, enable localhost bypass as noted above.
+- Auth: MCP HTTP uses bearer token and/or JWT. The `/mail` UI uses `MAIL_UI_PASSWORD` cookie login and is not gated by the MCP bearer token.
 - Rate limiting (optional): Token-bucket limiter can be enabled; UI GET requests are light and unaffected by POST limits.
 
 ### Troubleshooting the UI
 
-- Blank page or 401 on localhost: Either unset `HTTP_BEARER_TOKEN` or set `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED=true`.
+- MCP 401 on localhost: unset `HTTP_BEARER_TOKEN` or set `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED=true`.
+- `/mail` redirected to login: set `MAIL_UI_PASSWORD` and sign in at `/mail/login`.
 - No projects listed: Create one with `ensure_project`.
 - Empty inbox: Verify recipient names match exactly and messages were sent to that agent.
 - Search returns nothing: Try simpler terms or the LIKE fallback (toggle scope/body).
@@ -2004,8 +2007,12 @@ Common variables you may set:
 | `HTTP_CORS_ALLOW_CREDENTIALS` | `false` | Allow credentials on CORS |
 | `HTTP_CORS_ALLOW_METHODS` | `*` | CSV of allowed methods or `*` |
 | `HTTP_CORS_ALLOW_HEADERS` | `*` | CSV of allowed headers or `*` |
-| `HTTP_BEARER_TOKEN` |  | Static bearer token (only when JWT disabled) |
-| `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED` | `true` | Allow localhost requests without auth (dev convenience) |
+| `HTTP_BEARER_TOKEN` |  | Static bearer token for MCP HTTP (independent of the mail UI cookie login) |
+| `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED` | `true` | Allow localhost MCP requests without a bearer token (dev convenience) |
+| `MAIL_UI_USERNAME` | `operator` | Human username for the `/mail` cookie session |
+| `MAIL_UI_PASSWORD` |  | Human password for `/mail/login`. Required for non-localhost mail UI access |
+| `MAIL_UI_SESSION_SECRET` |  | Optional signing secret for mail UI cookies; derived from the password when unset |
+| `MAIL_UI_SESSION_TTL_SECONDS` | `43200` | Mail UI session lifetime in seconds (clamped 300–2592000) |
 | `HTTP_OTEL_ENABLED` | `false` | Enable OpenTelemetry instrumentation |
 | `OTEL_SERVICE_NAME` | `mcp-agent-mail` | Service name for telemetry |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` |  | OTLP exporter endpoint URL |
@@ -2123,7 +2130,7 @@ This section has been removed to keep the README focused. See API Quick Referenc
   - HTTP-only (Streamable HTTP). Place behind a reverse proxy (e.g., NGINX) with TLS termination for production
 - Auth
   - Optional JWT (HS*/JWKS) via HTTP middleware; enable with `HTTP_JWT_ENABLED=true`
-  - Static bearer token (`HTTP_BEARER_TOKEN`) is independent of JWT; when set, BearerAuth protects all routes (including UI). You may use it alone or together with JWT.
+  - Static bearer token (`HTTP_BEARER_TOKEN`) is independent of JWT; when set, BearerAuth protects MCP HTTP routes. The `/mail` UI is exempt and uses `MAIL_UI_PASSWORD` cookie login instead.
   - When JWKS is configured (`HTTP_JWT_JWKS_URL`), incoming JWTs must include a matching `kid` header; tokens without `kid` or with unknown `kid` are rejected
   - Starter RBAC (reader vs writer) using role configuration; see `HTTP_RBAC_*` settings
   - Bearer-only RBAC note: when JWT is disabled, requests use `HTTP_RBAC_DEFAULT_ROLE` (default `reader`). That means non-localhost tool calls are read-only unless you set `HTTP_RBAC_DEFAULT_ROLE=writer`, disable RBAC (`HTTP_RBAC_ENABLED=false`), or switch to JWT roles. Localhost requests with `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED=true` are auto-elevated to writer.

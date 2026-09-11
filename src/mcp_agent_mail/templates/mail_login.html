@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}{{ _("Sign in") }} — {{ _("Agent Mail") }}{% endblock %}
+
+{% block header_actions %}{% endblock %}
+
+{% block content %}
+<div class="min-h-[60vh] flex items-center justify-center animate-fade-in">
+  <div class="w-full max-w-md">
+    <div class="bg-white dark:bg-slate-800 rounded-2xl p-8 shadow-large border border-slate-200 dark:border-slate-700">
+      <h1 class="text-2xl font-bold text-slate-900 dark:text-white mb-2">{{ _("Sign in to Agent Mail") }}</h1>
+      <p class="text-sm text-slate-600 dark:text-slate-400 mb-6">
+        {{ _("This sign-in is for the human mail interface. MCP clients still use a separate bearer token.") }}
+      </p>
+
+      {% if error_message %}
+      <div class="mb-4 rounded-lg border border-danger-200 bg-danger-50 dark:border-danger-800 dark:bg-danger-900/30 px-4 py-3 text-sm text-danger-800 dark:text-danger-200">
+        {{ error_message }}
+      </div>
+      {% endif %}
+
+      {% if login_configured %}
+      <form method="post" action="/mail/login" class="space-y-4" autocomplete="on">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ next_path }}">
+        <div>
+          <label for="mail-ui-username" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{{ _("Username") }}</label>
+          <input id="mail-ui-username" name="username" type="text" required maxlength="64"
+                 value="{{ mail_ui_username_value }}"
+                 autocomplete="username"
+                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-slate-900 dark:text-slate-100">
+        </div>
+        <div>
+          <label for="mail-ui-password" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{{ _("Password") }}</label>
+          <input id="mail-ui-password" name="password" type="password" required
+                 autocomplete="current-password"
+                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-slate-900 dark:text-slate-100">
+        </div>
+        <button type="submit"
+                class="w-full h-10 rounded-lg bg-primary-600 hover:bg-primary-700 text-white font-semibold transition-colors">
+          {{ _("Sign in") }}
+        </button>
+      </form>
+      {% else %}
+      <p class="text-sm text-slate-700 dark:text-slate-300">
+        {{ _("Mail UI login is not configured. Set MAIL_UI_PASSWORD in the server environment.") }}
+      </p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

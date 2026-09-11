@@ -805,8 +805,14 @@ def display_startup_banner(settings: Any, host: str, port: int, path: str) -> No
     server_table.add_row("💾 Database", f"[dim]{settings.database.url}[/dim]")
     server_table.add_row("📁 Storage", f"[dim]{settings.storage.root}[/dim]")
     server_table.add_row(
-        "🔒 Auth",
-        "[bold bright_green]ENABLED[/bold bright_green]" if settings.http.bearer_token else "[dim]disabled[/dim]"
+        "🔒 MCP Bearer",
+        "[bold bright_green]ENABLED[/bold bright_green]" if settings.http.bearer_token else "[dim]disabled[/dim]",
+    )
+    server_table.add_row(
+        "👤 Mail UI",
+        "[bold bright_green]cookie login[/bold bright_green]"
+        if (settings.http.mail_ui_password or "").strip()
+        else "[dim]password unset (localhost only)[/dim]",
     )
     server_table.add_row(
         "📝 Tool Logging",

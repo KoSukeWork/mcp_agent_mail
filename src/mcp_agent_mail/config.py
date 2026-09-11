@@ -74,6 +74,11 @@ class HttpSettings:
     rbac_readonly_tools: list[str]
     # Dev convenience
     allow_localhost_unauthenticated: bool
+    # Human mail UI cookie login (independent from HTTP_BEARER_TOKEN)
+    mail_ui_username: str
+    mail_ui_password: str | None
+    mail_ui_session_secret: str | None
+    mail_ui_session_ttl_seconds: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -453,6 +458,13 @@ def _build_settings() -> Settings:
             default="health_check,fetch_inbox,whois,search_messages,summarize_thread",
         ),
         allow_localhost_unauthenticated=_b("HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED", default=True),
+        mail_ui_username=decouple_config("MAIL_UI_USERNAME", default="operator").strip() or "operator",
+        mail_ui_password=decouple_config("MAIL_UI_PASSWORD", default="") or None,
+        mail_ui_session_secret=decouple_config("MAIL_UI_SESSION_SECRET", default="") or None,
+        mail_ui_session_ttl_seconds=min(
+            max(_i("MAIL_UI_SESSION_TTL_SECONDS", default=43200), 300),
+            2_592_000,
+        ),
     )
 
     database_settings = DatabaseSettings(

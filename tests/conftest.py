@@ -104,6 +104,9 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_AUTHOR_NAME", "test-agent")
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
     monkeypatch.setenv("INLINE_IMAGE_MAX_BYTES", "128")
+    monkeypatch.setenv("MAIL_UI_USERNAME", "operator")
+    monkeypatch.setenv("MAIL_UI_PASSWORD", "")
+    monkeypatch.setenv("MAIL_UI_SESSION_SECRET", "")
     clear_settings_cache()
     reset_database_state()
     try:
