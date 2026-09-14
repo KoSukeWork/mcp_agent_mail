@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import importlib
 import json
 import secrets
 import time
@@ -77,6 +78,7 @@ class LoginAttemptLimiter:
         max_entries: int = _LOGIN_MAX_TRACKED_CLIENTS,
         state_ttl_seconds: float = _LOGIN_STATE_TTL_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
+        redis_url: str | None = None,
     ) -> None:
         self._per_minute = max(0, int(per_minute))
         self._max_entries = max(1, int(max_entries))
@@ -84,6 +86,13 @@ class LoginAttemptLimiter:
         self._monotonic = monotonic
         self._states: dict[str, _LoginAttemptState] = {}
         self._last_cleanup = monotonic()
+        self._redis: Any | None = None
+        if redis_url:
+            try:
+                redis_asyncio = importlib.import_module("redis.asyncio")
+                self._redis = redis_asyncio.Redis.from_url(redis_url)
+            except Exception as exc:
+                raise RuntimeError("Redis login rate limiting backend is unavailable") from exc
 
     @property
     def entry_count(self) -> int:
@@ -91,9 +100,45 @@ class LoginAttemptLimiter:
 
         return len(self._states)
 
-    def allow(self, client_ip: str) -> bool:
+    async def allow(self, client_ip: str) -> bool:
         if self._per_minute <= 0:
             return True
+        if self._redis is not None:
+            result = await self._redis.eval(
+                """
+                local key = KEYS[1]
+                local now = tonumber(redis.call('TIME')[1])
+                local limit = tonumber(ARGV[1])
+                local ttl = tonumber(ARGV[2])
+                local state = redis.call('HMGET', key, 'window_started', 'attempts', 'blocked_until')
+                local started = tonumber(state[1]) or now
+                local attempts = tonumber(state[2]) or 0
+                local blocked_until = tonumber(state[3]) or 0
+                if now < blocked_until then
+                    redis.call('EXPIRE', key, ttl)
+                    return 0
+                end
+                if now - started >= 60 then
+                    started = now
+                    attempts = 0
+                end
+                if attempts >= limit then
+                    redis.call('EXPIRE', key, ttl)
+                    return 0
+                end
+                redis.call('HSET', key,
+                    'window_started', started,
+                    'attempts', attempts + 1,
+                    'last_seen', now)
+                redis.call('EXPIRE', key, ttl)
+                return 1
+                """,
+                1,
+                self._redis_key(client_ip),
+                self._per_minute,
+                int(self._state_ttl_seconds),
+            )
+            return bool(result)
         now = self._monotonic()
         self._cleanup_if_needed(now)
         state = self._states.get(client_ip)
@@ -113,8 +158,32 @@ class LoginAttemptLimiter:
         state.attempts += 1
         return True
 
-    def record_failure(self, client_ip: str) -> None:
+    async def record_failure(self, client_ip: str) -> None:
         if self._per_minute <= 0:
+            return
+        if self._redis is not None:
+            await self._redis.eval(
+                """
+                local key = KEYS[1]
+                local now = tonumber(redis.call('TIME')[1])
+                local ttl = tonumber(ARGV[1])
+                local failures = redis.call('HINCRBY', key, 'failures', 1)
+                redis.call('HSET', key, 'last_seen', now)
+                if redis.call('HEXISTS', key, 'window_started') == 0 then
+                    redis.call('HSET', key, 'window_started', now, 'attempts', 1)
+                end
+                if failures >= 5 then
+                    local exponent = math.min(failures - 4, 4)
+                    local delay = math.min(16, 2 ^ exponent)
+                    redis.call('HSET', key, 'blocked_until', now + delay)
+                end
+                redis.call('EXPIRE', key, ttl)
+                return failures
+                """,
+                1,
+                self._redis_key(client_ip),
+                int(self._state_ttl_seconds),
+            )
             return
         now = self._monotonic()
         state = self._states.get(client_ip)
@@ -129,8 +198,22 @@ class LoginAttemptLimiter:
             delay = float(min(_LOGIN_BACKOFF_MAX_SECONDS, 2 ** min(state.failures - 4, 4)))
             state.blocked_until = now + delay
 
-    def record_success(self, client_ip: str) -> None:
+    async def record_success(self, client_ip: str) -> None:
+        if self._redis is not None:
+            await self._redis.delete(self._redis_key(client_ip))
+            return
         self._states.pop(client_ip, None)
+
+    async def close(self) -> None:
+        if self._redis is not None:
+            close = getattr(self._redis, "aclose", None)
+            if close is not None:
+                await close()
+
+    @staticmethod
+    def _redis_key(client_ip: str) -> str:
+        digest = hashlib.sha256(client_ip.encode("utf-8")).hexdigest()
+        return f"mcp-agent-mail:mail-ui-login:{digest}"
 
     def _cleanup_if_needed(self, now: float) -> None:
         if (
@@ -195,15 +278,20 @@ def sanitize_mail_next_path(raw: str | None) -> str:
 
 
 def session_signing_key(settings: Settings) -> bytes | None:
-    """Return a cookie key bound to both the independent secret and password."""
+    """Return a cookie key bound to the current operator credentials."""
 
     explicit = (settings.http.mail_ui_session_secret or "").strip()
+    username = _configured_username(settings)
     password = (settings.http.mail_ui_password or "").strip()
     if not explicit or not password:
         return None
     return hmac.new(
         explicit.encode("utf-8"),
-        _SESSION_PURPOSE + b"\0" + password.encode("utf-8"),
+        _SESSION_PURPOSE
+        + b"\0"
+        + username.encode("utf-8")
+        + b"\0"
+        + password.encode("utf-8"),
         hashlib.sha256,
     ).digest()
 
@@ -258,7 +346,7 @@ def parse_session_cookie(
 def verify_mail_ui_credentials(settings: Settings, username: str, password: str) -> bool:
     """Constant-time comparison of the configured operator credentials."""
 
-    expected_user = (settings.http.mail_ui_username or "operator").strip() or "operator"
+    expected_user = _configured_username(settings)
     expected_password = (settings.http.mail_ui_password or "").strip()
     provided_user = username.strip()
     provided_password = password
@@ -369,6 +457,10 @@ class MailUIAuthMiddleware(BaseHTTPMiddleware):
                 request.cookies.get(MAIL_UI_SESSION_COOKIE),
                 secret=secret,
             )
+            if session is not None and not _consteq(
+                _configured_username(self._settings), session.username
+            ):
+                session = None
         token = _current_mail_ui_session.set(session)
         try:
             return _no_store(await self._enforce(request, call_next, session))
@@ -501,6 +593,10 @@ def _is_localhost_host(host: str) -> bool:
         return False
     mapped = getattr(address, "ipv4_mapped", None)
     return address.is_loopback or bool(mapped is not None and mapped.is_loopback)
+
+
+def _configured_username(settings: Settings) -> str:
+    return (settings.http.mail_ui_username or "operator").strip() or "operator"
 
 
 def _request_host_is_loopback(request: Request, *, allow_test_host: bool = False) -> bool:

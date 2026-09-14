@@ -1,0 +1,12 @@
+{
+  "name": "mcp-agent-mail-web-assets",
+  "private": true,
+  "scripts": {
+    "build:mail-css": "tailwindcss -i ./web/mail-tailwind.css -o ./src/mcp_agent_mail/static/mail-tailwind.css --minify",
+    "check:mail-css": "npm run build:mail-css && git diff --exit-code -- src/mcp_agent_mail/static/mail-tailwind.css"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3"
+  }
+}

@@ -70,8 +70,8 @@
   <body>
     <main>
       <nav>
-        <a href="/mail/login?next={{ next_path }}&lang=en">EN</a>
-        <a href="/mail/login?next={{ next_path }}&lang=zh-CN">中</a>
+        <a href="/mail/login?next={{ next_path|urlencode }}&amp;lang=en">EN</a>
+        <a href="/mail/login?next={{ next_path|urlencode }}&amp;lang=zh-CN">中</a>
       </nav>
       <h1>{{ _("Sign in to Agent Mail") }}</h1>
       <p>{{ _("This sign-in is for the human mail interface. MCP clients still use a separate bearer token.") }}</p>

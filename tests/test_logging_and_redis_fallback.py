@@ -26,8 +26,8 @@ async def test_log_json_enabled_path(isolated_env, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_redis_fallback(isolated_env, monkeypatch):
-    # Force redis backend but make import fail so it falls back to memory
+async def test_rate_limit_redis_import_failure_fails_closed(isolated_env, monkeypatch):
+    # Explicit Redis-backed login limiting must never silently degrade to per-process memory.
     monkeypatch.setenv("HTTP_RATE_LIMIT_ENABLED", "true")
     monkeypatch.setenv("HTTP_RATE_LIMIT_BACKEND", "redis")
     monkeypatch.setenv("HTTP_RATE_LIMIT_REDIS_URL", "redis://localhost:6379/0")
@@ -45,8 +45,5 @@ async def test_rate_limit_redis_fallback(isolated_env, monkeypatch):
     real_import = importlib.import_module
     monkeypatch.setattr(importlib, "import_module", fake_import)
 
-    app = build_http_app(settings, build_mcp_server())
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.get("/health/liveness")
-        assert r.status_code == 200
+    with pytest.raises(RuntimeError, match="Redis login rate limiting backend is unavailable"):
+        build_http_app(settings, build_mcp_server())

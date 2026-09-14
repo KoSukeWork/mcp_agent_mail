@@ -7,6 +7,27 @@ on:
     branches: [main]
 
 jobs:
+  web-assets:
+    name: Web assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install locked frontend build dependencies
+        env:
+          npm_config_user_agent: OpenAI File Downloader, XaiImageApiFetch/1.0
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Verify generated Mail UI CSS
+        run: npm run check:mail-css
+
   cross-platform-quality:
     name: Quality (${{ matrix.os }}, Python 3.14)
     runs-on: ${{ matrix.os }}

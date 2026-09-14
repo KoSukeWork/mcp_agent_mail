@@ -1308,6 +1308,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             try:
                 yield
             finally:
+                login_limiter = getattr(app.state, "mail_ui_login_limiter", None)
+                if login_limiter is not None:
+                    try:
+                        await login_limiter.close()
+                    except Exception:  # pragma: no cover - defensive shutdown logging
+                        logging.error("Failed to close Mail UI login limiter", exc_info=True)
                 await _shutdown()
 
     # Now construct FastAPI with the composed lifespan so ASGI transports run it.
@@ -1491,8 +1497,14 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         )
 
     app_mail_ui = cast(Any, fastapi_app)
+    login_rate_limit_redis_url = (
+        settings.http.rate_limit_redis_url
+        if settings.http.rate_limit_backend == "redis"
+        else None
+    )
     app_mail_ui.state.mail_ui_login_limiter = LoginAttemptLimiter(
-        per_minute=int(settings.http.mail_ui_login_rate_limit_per_minute)
+        per_minute=int(settings.http.mail_ui_login_rate_limit_per_minute),
+        redis_url=login_rate_limit_redis_url,
     )
     app_mail_ui.add_middleware(MailUIAuthMiddleware, settings=settings)
 
@@ -2323,6 +2335,19 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 )
             return {name: values[0] for name, values in parsed.items()}
 
+        mail_tailwind_css_path = Path(__file__).with_name("static") / "mail-tailwind.css"
+
+        @fastapi_app.get("/mail/assets/mail-tailwind.css", include_in_schema=False)
+        async def mail_tailwind_css_asset() -> FileResponse:
+            return FileResponse(
+                mail_tailwind_css_path,
+                media_type="text/css; charset=utf-8",
+                headers={
+                    "Cross-Origin-Resource-Policy": "same-origin",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
         @fastapi_app.get("/mail/login", response_class=HTMLResponse)
         async def mail_login_page(request: Request) -> HTMLResponse:
             return await _login_page_response(
@@ -2362,9 +2387,23 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         @fastapi_app.post("/mail/login")
         async def mail_login_submit(request: Request) -> Response:
+            if not origin_is_same_site(request):
+                return JSONResponse(
+                    {"detail": "Cross-site mail UI login requests are not allowed"},
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
             limiter = getattr(request.app.state, "mail_ui_login_limiter", None)
             client_ip = request.client.host if request.client else "unknown"
-            if limiter is not None and not limiter.allow(client_ip):
+            try:
+                allowed = limiter is None or await limiter.allow(client_ip)
+            except Exception:
+                logging.error("Mail UI login rate limiter unavailable", exc_info=True)
+                return JSONResponse(
+                    {"detail": "Mail UI login is temporarily unavailable"},
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    headers={"Retry-After": "5"},
+                )
+            if not allowed:
                 verify_mail_ui_credentials(settings, "", "")
                 return await _login_page_response(
                     request,
@@ -2378,19 +2417,34 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             password = form.get("password", "")
             next_path = sanitize_mail_next_path(form.get("next", "/mail"))
             csrf_token = form.get("csrf_token", "")
-            origin_ok = origin_is_same_site(request)
             csrf_ok = verify_login_csrf(request, csrf_token)
             credentials_ok = verify_mail_ui_credentials(settings, username, password)
-            if not origin_ok or not csrf_ok or not credentials_ok:
+            if not csrf_ok or not credentials_ok:
                 if limiter is not None:
-                    limiter.record_failure(client_ip)
+                    try:
+                        await limiter.record_failure(client_ip)
+                    except Exception:
+                        logging.error("Mail UI login rate limiter unavailable", exc_info=True)
+                        return JSONResponse(
+                            {"detail": "Mail UI login is temporarily unavailable"},
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            headers={"Retry-After": "5"},
+                        )
                 return await _login_page_response(
                     request,
                     next_path=next_path,
                     error_message=gettext("Invalid username or password."),
                 )
             if limiter is not None:
-                limiter.record_success(client_ip)
+                try:
+                    await limiter.record_success(client_ip)
+                except Exception:
+                    logging.error("Mail UI login rate limiter unavailable", exc_info=True)
+                    return JSONResponse(
+                        {"detail": "Mail UI login is temporarily unavailable"},
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        headers={"Retry-After": "5"},
+                    )
             redirect = RedirectResponse(next_path, status_code=status.HTTP_303_SEE_OTHER)
             issue_mail_ui_session(
                 redirect,

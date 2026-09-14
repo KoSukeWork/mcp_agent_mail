@@ -31,7 +31,7 @@
   <!-- Subtle Info Notice -->
   <div class="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-lg p-4">
     <div class="flex items-start gap-3">
-      <i data-lucide="info" class="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5"></i>
+    <i data-lucide="info" class="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5"></i>
       <div class="text-sm text-blue-900 dark:text-blue-100">
         <p class="font-medium mb-1">{{ _("How Human Overseer messages work") }}</p>
         <p class="text-blue-700 dark:text-blue-300">{{ _("Agents receive your message with a preamble indicating human guidance. They'll pause current work to prioritize your request, then resume their original tasks.") }}</p>
@@ -275,7 +275,7 @@ Please investigate the following:
     <!-- Preamble Preview (subtle) -->
     <div class="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-4">
       <div class="flex items-start gap-3 mb-3">
-        <i data-lucide="eye" class="w-5 h-5 text-slate-600 dark:text-slate-400 flex-shrink-0 mt-0.5"></i>
+      <i data-lucide="eye" class="w-5 h-5 text-slate-600 dark:text-slate-400 shrink-0 mt-0.5"></i>
         <div>
           <h3 class="text-sm font-medium text-slate-900 dark:text-white mb-1">Automatic Preamble</h3>
           <p class="text-xs text-slate-600 dark:text-slate-400">This preamble will be automatically prepended to your message</p>
@@ -319,7 +319,7 @@ Please investigate the following:
          class="fixed bottom-6 right-6 z-[100] max-w-md">
       <div :class="toastType === 'success' ? 'bg-green-600' : 'bg-red-600'"
            class="rounded-lg p-4 shadow-xl text-white flex items-start gap-3">
-        <i :data-lucide="toastType === 'success' ? 'check-circle' : 'alert-circle'" class="w-5 h-5 flex-shrink-0"></i>
+    <i :data-lucide="toastType === 'success' ? 'check-circle' : 'alert-circle'" class="w-5 h-5 shrink-0"></i>
         <div class="flex-1 min-w-0">
           <h4 class="font-semibold mb-0.5" x-text="toastTitle"></h4>
           <p class="text-sm opacity-90" x-text="toastMessage"></p>
@@ -361,7 +361,7 @@ Please investigate the following:
               <span class="font-medium text-slate-900 dark:text-white" x-text='{{ _("{count} agent(s)") | tojson }}.replace("{count}", selectedRecipients.length)'></span>
           </div>
           <div class="flex items-start justify-between text-sm gap-3">
-            <span class="text-slate-600 dark:text-slate-400 flex-shrink-0">{{ _("Subject:") }}</span>
+      <span class="text-slate-600 dark:text-slate-400 shrink-0">{{ _("Subject:") }}</span>
             <span class="font-medium text-slate-900 dark:text-white text-right" x-text="subject"></span>
           </div>
           <div class="flex items-center justify-between text-sm">
