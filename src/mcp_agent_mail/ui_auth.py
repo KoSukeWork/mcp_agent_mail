@@ -11,8 +11,8 @@ import base64
 import hashlib
 import hmac
 import json
-import re
 import secrets
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp
 
-from .config import Settings
+from .config import MAIL_UI_USERNAME_RE, Settings
 
 MAIL_UI_SESSION_COOKIE: Final = "agent_mail_ui_session"
 MAIL_UI_LOGIN_CSRF_COOKIE: Final = "agent_mail_ui_login_csrf"
@@ -33,9 +33,9 @@ MAIL_UI_LOGOUT_PATH: Final = "/mail/logout"
 MAIL_UI_COOKIE_PATH: Final = "/mail"
 SESSION_VERSION: Final = 1
 _SESSION_PURPOSE: Final = b"mcp-agent-mail-ui-session-v1"
-_DERIVED_PURPOSE: Final = b"mcp-agent-mail-ui-session-derived-v1"
 _UNSAFE_METHODS: Final = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-_USERNAME_RE: Final = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
+_LOGIN_BACKOFF_AFTER_FAILURES: Final = 5
+_LOGIN_BACKOFF_MAX_SECONDS: Final = 16.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +51,45 @@ _current_mail_ui_session: ContextVar[MailUISession | None] = ContextVar(
     "current_mail_ui_session",
     default=None,
 )
+
+
+class LoginAttemptLimiter:
+    """Per-IP login attempt limiter with short backoff after repeated failures."""
+
+    def __init__(self, *, per_minute: int) -> None:
+        self._per_minute = max(0, int(per_minute))
+        self._windows: dict[str, tuple[float, int]] = {}
+        self._failures: dict[str, int] = {}
+        self._blocked_until: dict[str, float] = {}
+
+    def allow(self, client_ip: str) -> bool:
+        if self._per_minute <= 0:
+            return True
+        now = time.monotonic()
+        if now < self._blocked_until.get(client_ip, 0.0):
+            return False
+        start, count = self._windows.get(client_ip, (now, 0))
+        if now - start >= 60.0:
+            start, count = now, 0
+        if count >= self._per_minute:
+            self._windows[client_ip] = (start, count)
+            return False
+        self._windows[client_ip] = (start, count + 1)
+        return True
+
+    def record_failure(self, client_ip: str) -> None:
+        if self._per_minute <= 0:
+            return
+        now = time.monotonic()
+        consecutive = self._failures.get(client_ip, 0) + 1
+        self._failures[client_ip] = consecutive
+        if consecutive >= _LOGIN_BACKOFF_AFTER_FAILURES:
+            delay = float(min(_LOGIN_BACKOFF_MAX_SECONDS, 2 ** min(consecutive - 4, 4)))
+            self._blocked_until[client_ip] = now + delay
+
+    def record_success(self, client_ip: str) -> None:
+        self._failures.pop(client_ip, None)
+        self._blocked_until.pop(client_ip, None)
 
 
 def is_mail_ui_path(path: str) -> bool:
@@ -87,7 +126,9 @@ def sanitize_mail_next_path(raw: str | None) -> str:
     """Allow only relative ``/mail`` paths; reject open redirects."""
 
     candidate = (raw or "").strip() or "/mail"
-    if "\\" in candidate or "://" in candidate or candidate.startswith("//"):
+    if any(control in candidate for control in ("\\", "\r", "\n", "\x00")):
+        return "/mail"
+    if "://" in candidate or candidate.startswith("//"):
         return "/mail"
     if not candidate.startswith("/mail"):
         return "/mail"
@@ -100,12 +141,9 @@ def session_signing_key(settings: Settings) -> bytes | None:
     """Return the HMAC key used to sign mail-UI session cookies."""
 
     explicit = (settings.http.mail_ui_session_secret or "").strip()
-    if explicit:
-        return hashlib.sha256(_SESSION_PURPOSE + b"\0" + explicit.encode("utf-8")).digest()
-    password = (settings.http.mail_ui_password or "").strip()
-    if password:
-        return hashlib.sha256(_DERIVED_PURPOSE + b"\0" + password.encode("utf-8")).digest()
-    return None
+    if not explicit:
+        return None
+    return hashlib.sha256(_SESSION_PURPOSE + b"\0" + explicit.encode("utf-8")).digest()
 
 
 def sign_session_payload(payload: dict[str, Any], *, secret: bytes) -> str:
@@ -124,10 +162,10 @@ def parse_session_cookie(
     body, _, signature = value.partition(".")
     if not body or not signature:
         return None
-    expected = hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest()
     try:
+        expected = hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest()
         provided = _unb64url(signature)
-    except (ValueError, OSError):
+    except (ValueError, OSError, UnicodeEncodeError):
         return None
     if not hmac.compare_digest(expected, provided):
         return None
@@ -143,7 +181,7 @@ def parse_session_cookie(
     version = payload_obj.get("v")
     if version != SESSION_VERSION:
         return None
-    if not isinstance(username, str) or not _USERNAME_RE.fullmatch(username):
+    if not isinstance(username, str) or not MAIL_UI_USERNAME_RE.fullmatch(username):
         return None
     if not isinstance(csrf, str) or not (16 <= len(csrf) <= 128):
         return None
@@ -271,7 +309,7 @@ class MailUIAuthMiddleware(BaseHTTPMiddleware):
             )
         token = _current_mail_ui_session.set(session)
         try:
-            return await self._enforce(request, call_next, session)
+            return _no_store(await self._enforce(request, call_next, session))
         finally:
             _current_mail_ui_session.reset(token)
 
@@ -307,14 +345,25 @@ class MailUIAuthMiddleware(BaseHTTPMiddleware):
             return _unauthenticated(request)
 
         if _is_direct_loopback(request):
-            # No human password configured: keep local-dev convenience.
-            # HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED continues to gate MCP bearer
-            # auth only; it is not a remote-open switch for /mail.
+            # No human password configured: keep local-dev GET convenience.
+            # Browser CSRF POSTs always send Origin; reject cross-site writes.
+            if method in _UNSAFE_METHODS and not _loopback_write_allowed(request):
+                return _forbidden("Cross-origin mailbox writes are not allowed")
             return await call_next(request)
         return _unauthenticated(
             request,
             message="Mail UI login is not configured. Set MAIL_UI_PASSWORD in the server environment.",
         )
+
+
+def _loopback_write_allowed(request: Request) -> bool:
+    """Allow non-browser clients that omit Origin; reject cross-site browser POSTs."""
+
+    origin = request.headers.get("origin", "").strip()
+    referer = request.headers.get("referer", "").strip()
+    if origin or referer:
+        return origin_is_same_site(request)
+    return True
 
 
 def _unauthenticated(request: Request, message: str = "Authentication required") -> Response:
@@ -401,3 +450,9 @@ def _consteq(left: str, right: str) -> bool:
         hmac.compare_digest(left_b, left_b)
         return False
     return hmac.compare_digest(left_b, right_b)
+
+
+def _no_store(response: Response) -> Response:
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response

@@ -2009,10 +2009,11 @@ Common variables you may set:
 | `HTTP_CORS_ALLOW_HEADERS` | `*` | CSV of allowed headers or `*` |
 | `HTTP_BEARER_TOKEN` |  | Static bearer token for MCP HTTP (independent of the mail UI cookie login) |
 | `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED` | `true` | Allow localhost MCP requests without a bearer token (dev convenience) |
-| `MAIL_UI_USERNAME` | `operator` | Human username for the `/mail` cookie session |
+| `MAIL_UI_USERNAME` | `operator` | Human username for the `/mail` cookie session (`[A-Za-z0-9._@-]{1,64}`) |
 | `MAIL_UI_PASSWORD` |  | Human password for `/mail/login`. Required for non-localhost mail UI access |
-| `MAIL_UI_SESSION_SECRET` |  | Optional signing secret for mail UI cookies; derived from the password when unset |
-| `MAIL_UI_SESSION_TTL_SECONDS` | `43200` | Mail UI session lifetime in seconds (clamped 300–2592000) |
+| `MAIL_UI_SESSION_SECRET` |  | Required high-entropy cookie signing secret (at least 32 chars) when `MAIL_UI_PASSWORD` is set |
+| `MAIL_UI_SESSION_TTL_SECONDS` | `43200` | Mail UI session lifetime in seconds (clamped 300-2592000) |
+| `MAIL_UI_LOGIN_RATE_LIMIT_PER_MINUTE` | `10` | Independent `/mail/login` attempt limit per client IP; `0` disables |
 | `HTTP_OTEL_ENABLED` | `false` | Enable OpenTelemetry instrumentation |
 | `OTEL_SERVICE_NAME` | `mcp-agent-mail` | Service name for telemetry |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` |  | OTLP exporter endpoint URL |

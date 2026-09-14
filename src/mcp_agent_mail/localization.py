@@ -284,6 +284,7 @@ _ZH_CN: dict[str, str] = {
     "Sign in to Agent Mail": "登录 Agent Mail",
     "This sign-in is for the human mail interface. MCP clients still use a separate bearer token.": "此登录用于人类邮件界面。MCP 客户端仍使用单独的 Bearer token。",
     "Invalid username or password.": "用户名或密码无效。",
+    "Too many sign-in attempts. Try again later.": "登录尝试过多，请稍后再试。",
     "Mail UI login is not configured. Set MAIL_UI_PASSWORD in the server environment.": "未配置邮件界面登录。请在服务器环境中设置 MAIL_UI_PASSWORD。",
     "Toggle dark mode": "切换深色模式",
     "Notifications": "通知",

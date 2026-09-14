@@ -1,52 +1,98 @@
-{% extends "base.html" %}
-
-{% block title %}{{ _("Sign in") }} — {{ _("Agent Mail") }}{% endblock %}
-
-{% block header_actions %}{% endblock %}
-
-{% block content %}
-<div class="min-h-[60vh] flex items-center justify-center animate-fade-in">
-  <div class="w-full max-w-md">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl p-8 shadow-large border border-slate-200 dark:border-slate-700">
-      <h1 class="text-2xl font-bold text-slate-900 dark:text-white mb-2">{{ _("Sign in to Agent Mail") }}</h1>
-      <p class="text-sm text-slate-600 dark:text-slate-400 mb-6">
-        {{ _("This sign-in is for the human mail interface. MCP clients still use a separate bearer token.") }}
-      </p>
-
+<!doctype html>
+<html lang="{{ current_locale() }}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" />
+    <title>{{ _("Sign in") }} — {{ _("Agent Mail") }}</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: system-ui, sans-serif;
+        background: #f8fafc;
+        color: #0f172a;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      main {
+        width: min(28rem, calc(100vw - 2rem));
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 1rem;
+        padding: 2rem;
+      }
+      h1 { font-size: 1.5rem; margin: 0 0 .5rem; }
+      p { margin: 0 0 1.25rem; color: #475569; font-size: .9rem; line-height: 1.4; }
+      label { display: block; font-size: .875rem; font-weight: 600; margin: 0 0 .35rem; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        margin: 0 0 1rem;
+        padding: .6rem .7rem;
+        border: 1px solid #cbd5e1;
+        border-radius: .5rem;
+        font: inherit;
+      }
+      button {
+        width: 100%;
+        border: 0;
+        border-radius: .5rem;
+        padding: .7rem;
+        font: inherit;
+        font-weight: 650;
+        color: #fff;
+        background: #4f46e5;
+        cursor: pointer;
+      }
+      .error {
+        margin: 0 0 1rem;
+        padding: .75rem .9rem;
+        border-radius: .5rem;
+        border: 1px solid #fecaca;
+        background: #fef2f2;
+        color: #991b1b;
+        font-size: .875rem;
+      }
+      nav { margin: 0 0 1rem; font-size: .8rem; }
+      nav a { color: #4338ca; margin-right: .75rem; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #0f172a; color: #e2e8f0; }
+        main { background: #1e293b; border-color: #334155; }
+        p { color: #94a3b8; }
+        input { background: #0f172a; color: #e2e8f0; border-color: #475569; }
+        .error { background: #450a0a; border-color: #7f1d1d; color: #fecaca; }
+        nav a { color: #a5b4fc; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a href="/mail/login?next={{ next_path }}&lang=en">EN</a>
+        <a href="/mail/login?next={{ next_path }}&lang=zh-CN">中</a>
+      </nav>
+      <h1>{{ _("Sign in to Agent Mail") }}</h1>
+      <p>{{ _("This sign-in is for the human mail interface. MCP clients still use a separate bearer token.") }}</p>
       {% if error_message %}
-      <div class="mb-4 rounded-lg border border-danger-200 bg-danger-50 dark:border-danger-800 dark:bg-danger-900/30 px-4 py-3 text-sm text-danger-800 dark:text-danger-200">
-        {{ error_message }}
-      </div>
+      <div class="error">{{ error_message }}</div>
       {% endif %}
-
       {% if login_configured %}
-      <form method="post" action="/mail/login" class="space-y-4" autocomplete="on">
+      <form method="post" action="/mail/login" autocomplete="on">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="next" value="{{ next_path }}">
-        <div>
-          <label for="mail-ui-username" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{{ _("Username") }}</label>
-          <input id="mail-ui-username" name="username" type="text" required maxlength="64"
-                 value="{{ mail_ui_username_value }}"
-                 autocomplete="username"
-                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-slate-900 dark:text-slate-100">
-        </div>
-        <div>
-          <label for="mail-ui-password" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{{ _("Password") }}</label>
-          <input id="mail-ui-password" name="password" type="password" required
-                 autocomplete="current-password"
-                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-slate-900 dark:text-slate-100">
-        </div>
-        <button type="submit"
-                class="w-full h-10 rounded-lg bg-primary-600 hover:bg-primary-700 text-white font-semibold transition-colors">
-          {{ _("Sign in") }}
-        </button>
+        <label for="mail-ui-username">{{ _("Username") }}</label>
+        <input id="mail-ui-username" name="username" type="text" required maxlength="64"
+               value="{{ mail_ui_username_value }}" autocomplete="username">
+        <label for="mail-ui-password">{{ _("Password") }}</label>
+        <input id="mail-ui-password" name="password" type="password" required autocomplete="current-password">
+        <button type="submit">{{ _("Sign in") }}</button>
       </form>
       {% else %}
-      <p class="text-sm text-slate-700 dark:text-slate-300">
-        {{ _("Mail UI login is not configured. Set MAIL_UI_PASSWORD in the server environment.") }}
-      </p>
+      <p>{{ _("Mail UI login is not configured. Set MAIL_UI_PASSWORD in the server environment.") }}</p>
       {% endif %}
-    </div>
-  </div>
-</div>
-{% endblock %}
+    </main>
+  </body>
+</html>

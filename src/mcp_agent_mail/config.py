@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -14,6 +15,8 @@ from decouple import (
 )
 
 _DOTENV_PATH: Final[Path] = Path(".env")
+MAIL_UI_USERNAME_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
+MAIL_UI_SESSION_SECRET_MIN_LENGTH: Final[int] = 32
 
 
 def _build_decouple_config() -> DecoupleConfig:
@@ -79,6 +82,7 @@ class HttpSettings:
     mail_ui_password: str | None
     mail_ui_session_secret: str | None
     mail_ui_session_ttl_seconds: int
+    mail_ui_login_rate_limit_per_minute: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -388,6 +392,37 @@ def _identity_confirmation_url(value: str) -> str:
     return normalized
 
 
+def _mail_ui_username(value: str) -> str:
+    """Reject operator names that cannot be stored in the signed session cookie."""
+
+    if MAIL_UI_USERNAME_RE.fullmatch(value):
+        return value
+    raise ConfigError(
+        "MAIL_UI_USERNAME must be 1-64 characters in [A-Za-z0-9._@-]; "
+        f"got {value!r}."
+    )
+
+
+def _mail_ui_session_secret(value: str | None, *, password: str | None) -> str | None:
+    """Require a high-entropy cookie key whenever a UI password is configured."""
+
+    secret = (value or "").strip() or None
+    password_set = bool((password or "").strip())
+    if not password_set:
+        return secret
+    if secret is None:
+        raise ConfigError(
+            "MAIL_UI_SESSION_SECRET is required when MAIL_UI_PASSWORD is set; "
+            f"use at least {MAIL_UI_SESSION_SECRET_MIN_LENGTH} random characters."
+        )
+    if len(secret) < MAIL_UI_SESSION_SECRET_MIN_LENGTH:
+        raise ConfigError(
+            "MAIL_UI_SESSION_SECRET must be at least "
+            f"{MAIL_UI_SESSION_SECRET_MIN_LENGTH} characters."
+        )
+    return secret
+
+
 def _build_settings() -> Settings:
     decouple_config = _get_decouple_config()
     environment = decouple_config("APP_ENVIRONMENT", default="development")
@@ -458,12 +493,21 @@ def _build_settings() -> Settings:
             default="health_check,fetch_inbox,whois,search_messages,summarize_thread",
         ),
         allow_localhost_unauthenticated=_b("HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED", default=True),
-        mail_ui_username=decouple_config("MAIL_UI_USERNAME", default="operator").strip() or "operator",
+        mail_ui_username=_mail_ui_username(
+            decouple_config("MAIL_UI_USERNAME", default="operator").strip() or "operator"
+        ),
         mail_ui_password=decouple_config("MAIL_UI_PASSWORD", default="") or None,
-        mail_ui_session_secret=decouple_config("MAIL_UI_SESSION_SECRET", default="") or None,
+        mail_ui_session_secret=_mail_ui_session_secret(
+            decouple_config("MAIL_UI_SESSION_SECRET", default="") or None,
+            password=decouple_config("MAIL_UI_PASSWORD", default="") or None,
+        ),
         mail_ui_session_ttl_seconds=min(
             max(_i("MAIL_UI_SESSION_TTL_SECONDS", default=43200), 300),
             2_592_000,
+        ),
+        mail_ui_login_rate_limit_per_minute=max(
+            _i("MAIL_UI_LOGIN_RATE_LIMIT_PER_MINUTE", default=10),
+            0,
         ),
     )
 

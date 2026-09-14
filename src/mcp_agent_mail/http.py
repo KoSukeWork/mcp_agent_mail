@@ -63,6 +63,7 @@ from .storage import (
     write_file_reservation_record,
 )
 from .ui_auth import (
+    LoginAttemptLimiter,
     MailUIAuthMiddleware,
     clear_login_csrf_cookie,
     clear_mail_ui_session_cookie,
@@ -773,6 +774,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
             or request.url.path.startswith("/health/")
             or request.url.path == "/api/health"
             or request.url.path.startswith(("/identity/confirm/", "/api/identity/confirm/"))
+            or is_mail_ui_path(request.url.path)
         ):
             return await call_next(request)
 
@@ -1488,6 +1490,9 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         )
 
     app_mail_ui = cast(Any, fastapi_app)
+    app_mail_ui.state.mail_ui_login_limiter = LoginAttemptLimiter(
+        per_minute=int(settings.http.mail_ui_login_rate_limit_per_minute)
+    )
     app_mail_ui.add_middleware(MailUIAuthMiddleware, settings=settings)
 
     # Optional CORS
@@ -2250,17 +2255,32 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
         @fastapi_app.get("/mail/login", response_class=HTMLResponse)
         async def mail_login_page(request: Request) -> HTMLResponse:
+            return await _login_page_response(
+                request,
+                next_path=sanitize_mail_next_path(request.query_params.get("next")),
+                error_message=None,
+            )
+
+        async def _login_page_response(
+            request: Request,
+            *,
+            next_path: str,
+            error_message: str | None,
+            status_code: int = 200,
+        ) -> HTMLResponse:
             csrf_token = new_login_csrf_token()
             html = await _render(
                 "mail_login.html",
                 csrf_token=csrf_token,
-                next_path=sanitize_mail_next_path(request.query_params.get("next")),
-                error_message=None,
+                next_path=sanitize_mail_next_path(next_path),
+                error_message=error_message,
                 login_configured=credentials_configured(settings),
                 mail_ui_username_value=(settings.http.mail_ui_username or "operator"),
             )
             set_login_csrf_cookie(html, csrf_token, request=request)
-            html.headers["Cache-Control"] = "no-store"
+            html.headers["Cache-Control"] = "no-store, max-age=0"
+            html.headers["Pragma"] = "no-cache"
+            html.status_code = status_code
             return html
 
         @fastapi_app.post("/mail/login")
@@ -2270,22 +2290,29 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             password = str(form.get("password") or "")
             next_path = sanitize_mail_next_path(str(form.get("next") or "/mail"))
             csrf_token = str(form.get("csrf_token") or "")
+            limiter = getattr(request.app.state, "mail_ui_login_limiter", None)
+            client_ip = request.client.host if request.client else "unknown"
+            if limiter is not None and not limiter.allow(client_ip):
+                verify_mail_ui_credentials(settings, username, password)
+                return await _login_page_response(
+                    request,
+                    next_path=next_path,
+                    error_message=gettext("Too many sign-in attempts. Try again later."),
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
             origin_ok = origin_is_same_site(request)
             csrf_ok = verify_login_csrf(request, csrf_token)
             credentials_ok = verify_mail_ui_credentials(settings, username, password)
             if not origin_ok or not csrf_ok or not credentials_ok:
-                fresh_csrf = new_login_csrf_token()
-                html = await _render(
-                    "mail_login.html",
-                    csrf_token=fresh_csrf,
+                if limiter is not None:
+                    limiter.record_failure(client_ip)
+                return await _login_page_response(
+                    request,
                     next_path=next_path,
                     error_message=gettext("Invalid username or password."),
-                    login_configured=credentials_configured(settings),
-                    mail_ui_username_value=(settings.http.mail_ui_username or "operator"),
                 )
-                set_login_csrf_cookie(html, fresh_csrf, request=request)
-                html.headers["Cache-Control"] = "no-store"
-                return html
+            if limiter is not None:
+                limiter.record_success(client_ip)
             redirect = RedirectResponse(next_path, status_code=status.HTTP_303_SEE_OTHER)
             issue_mail_ui_session(
                 redirect,
