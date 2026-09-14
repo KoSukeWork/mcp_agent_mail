@@ -13,9 +13,11 @@ import hmac
 import json
 import secrets
 import time
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from ipaddress import ip_address
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -36,6 +38,9 @@ _SESSION_PURPOSE: Final = b"mcp-agent-mail-ui-session-v1"
 _UNSAFE_METHODS: Final = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _LOGIN_BACKOFF_AFTER_FAILURES: Final = 5
 _LOGIN_BACKOFF_MAX_SECONDS: Final = 16.0
+_LOGIN_WINDOW_SECONDS: Final = 60.0
+_LOGIN_STATE_TTL_SECONDS: Final = 900.0
+_LOGIN_MAX_TRACKED_CLIENTS: Final = 10_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +52,15 @@ class MailUISession:
     expires_at: int
 
 
+@dataclass(slots=True)
+class _LoginAttemptState:
+    window_started: float
+    last_seen: float
+    attempts: int = 0
+    failures: int = 0
+    blocked_until: float = 0.0
+
+
 _current_mail_ui_session: ContextVar[MailUISession | None] = ContextVar(
     "current_mail_ui_session",
     default=None,
@@ -54,42 +68,85 @@ _current_mail_ui_session: ContextVar[MailUISession | None] = ContextVar(
 
 
 class LoginAttemptLimiter:
-    """Per-IP login attempt limiter with short backoff after repeated failures."""
+    """Bounded per-IP login limiter with expiry and repeated-failure backoff."""
 
-    def __init__(self, *, per_minute: int) -> None:
+    def __init__(
+        self,
+        *,
+        per_minute: int,
+        max_entries: int = _LOGIN_MAX_TRACKED_CLIENTS,
+        state_ttl_seconds: float = _LOGIN_STATE_TTL_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._per_minute = max(0, int(per_minute))
-        self._windows: dict[str, tuple[float, int]] = {}
-        self._failures: dict[str, int] = {}
-        self._blocked_until: dict[str, float] = {}
+        self._max_entries = max(1, int(max_entries))
+        self._state_ttl_seconds = max(_LOGIN_WINDOW_SECONDS, float(state_ttl_seconds))
+        self._monotonic = monotonic
+        self._states: dict[str, _LoginAttemptState] = {}
+        self._last_cleanup = monotonic()
+
+    @property
+    def entry_count(self) -> int:
+        """Return tracked client count for diagnostics and bounded-state tests."""
+
+        return len(self._states)
 
     def allow(self, client_ip: str) -> bool:
         if self._per_minute <= 0:
             return True
-        now = time.monotonic()
-        if now < self._blocked_until.get(client_ip, 0.0):
+        now = self._monotonic()
+        self._cleanup_if_needed(now)
+        state = self._states.get(client_ip)
+        if state is None:
+            if len(self._states) >= self._max_entries:
+                return False
+            state = _LoginAttemptState(window_started=now, last_seen=now)
+            self._states[client_ip] = state
+        state.last_seen = now
+        if now < state.blocked_until:
             return False
-        start, count = self._windows.get(client_ip, (now, 0))
-        if now - start >= 60.0:
-            start, count = now, 0
-        if count >= self._per_minute:
-            self._windows[client_ip] = (start, count)
+        if now - state.window_started >= _LOGIN_WINDOW_SECONDS:
+            state.window_started = now
+            state.attempts = 0
+        if state.attempts >= self._per_minute:
             return False
-        self._windows[client_ip] = (start, count + 1)
+        state.attempts += 1
         return True
 
     def record_failure(self, client_ip: str) -> None:
         if self._per_minute <= 0:
             return
-        now = time.monotonic()
-        consecutive = self._failures.get(client_ip, 0) + 1
-        self._failures[client_ip] = consecutive
-        if consecutive >= _LOGIN_BACKOFF_AFTER_FAILURES:
-            delay = float(min(_LOGIN_BACKOFF_MAX_SECONDS, 2 ** min(consecutive - 4, 4)))
-            self._blocked_until[client_ip] = now + delay
+        now = self._monotonic()
+        state = self._states.get(client_ip)
+        if state is None:
+            if len(self._states) >= self._max_entries:
+                return
+            state = _LoginAttemptState(window_started=now, last_seen=now)
+            self._states[client_ip] = state
+        state.last_seen = now
+        state.failures += 1
+        if state.failures >= _LOGIN_BACKOFF_AFTER_FAILURES:
+            delay = float(min(_LOGIN_BACKOFF_MAX_SECONDS, 2 ** min(state.failures - 4, 4)))
+            state.blocked_until = now + delay
 
     def record_success(self, client_ip: str) -> None:
-        self._failures.pop(client_ip, None)
-        self._blocked_until.pop(client_ip, None)
+        self._states.pop(client_ip, None)
+
+    def _cleanup_if_needed(self, now: float) -> None:
+        if (
+            now - self._last_cleanup < _LOGIN_WINDOW_SECONDS
+            and len(self._states) < self._max_entries
+        ):
+            return
+        stale_before = now - self._state_ttl_seconds
+        stale_clients = [
+            client_ip
+            for client_ip, state in self._states.items()
+            if state.last_seen <= stale_before
+        ]
+        for client_ip in stale_clients:
+            self._states.pop(client_ip, None)
+        self._last_cleanup = now
 
 
 def is_mail_ui_path(path: str) -> bool:
@@ -138,12 +195,17 @@ def sanitize_mail_next_path(raw: str | None) -> str:
 
 
 def session_signing_key(settings: Settings) -> bytes | None:
-    """Return the HMAC key used to sign mail-UI session cookies."""
+    """Return a cookie key bound to both the independent secret and password."""
 
     explicit = (settings.http.mail_ui_session_secret or "").strip()
-    if not explicit:
+    password = (settings.http.mail_ui_password or "").strip()
+    if not explicit or not password:
         return None
-    return hashlib.sha256(_SESSION_PURPOSE + b"\0" + explicit.encode("utf-8")).digest()
+    return hmac.new(
+        explicit.encode("utf-8"),
+        _SESSION_PURPOSE + b"\0" + password.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
 
 
 def sign_session_payload(payload: dict[str, Any], *, secret: bytes) -> str:
@@ -302,7 +364,7 @@ class MailUIAuthMiddleware(BaseHTTPMiddleware):
 
         secret = session_signing_key(self._settings)
         session = None
-        if secret is not None:
+        if credentials_configured(self._settings) and secret is not None:
             session = parse_session_cookie(
                 request.cookies.get(MAIL_UI_SESSION_COOKIE),
                 secret=secret,
@@ -344,9 +406,14 @@ class MailUIAuthMiddleware(BaseHTTPMiddleware):
         if credentials_configured(self._settings):
             return _unauthenticated(request)
 
-        if _is_direct_loopback(request):
+        if _is_direct_loopback(request) and _request_host_is_loopback(
+            request,
+            allow_test_host=self._settings.environment.lower() == "test",
+        ):
             # No human password configured: keep local-dev GET convenience.
-            # Browser CSRF POSTs always send Origin; reject cross-site writes.
+            # Requiring a literal loopback Host prevents DNS rebinding from
+            # turning an attacker-controlled origin into an apparent same-origin
+            # request to a service bound on localhost.
             if method in _UNSAFE_METHODS and not _loopback_write_allowed(request):
                 return _forbidden("Cross-origin mailbox writes are not allowed")
             return await call_next(request)
@@ -425,9 +492,25 @@ def _is_direct_loopback(request: Request) -> bool:
 def _is_localhost_host(host: str) -> bool:
     if not host:
         return False
-    if host in {"127.0.0.1", "::1", "localhost"}:
+    normalized = host.rstrip(".").lower()
+    if normalized == "localhost":
         return True
-    return bool(host.lower().startswith("::ffff:") and host[7:] == "127.0.0.1")
+    try:
+        address = ip_address(normalized)
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return address.is_loopback or bool(mapped is not None and mapped.is_loopback)
+
+
+def _request_host_is_loopback(request: Request, *, allow_test_host: bool = False) -> bool:
+    """Reject attacker-controlled Host names in passwordless loopback mode."""
+
+    try:
+        hostname = (request.url.hostname or "").rstrip(".").lower()
+    except (AttributeError, ValueError):
+        return False
+    return (allow_test_host and hostname == "test") or _is_localhost_host(hostname)
 
 
 def _now_ts() -> int:

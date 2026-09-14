@@ -16,6 +16,7 @@ from collections.abc import MutableMapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol, cast
+from urllib.parse import parse_qs
 
 import structlog
 import uvicorn
@@ -2038,7 +2039,24 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             tpl = env.get_template(name)
             ctx["legacy_archive_notice"] = name.startswith("archive_")
             html = await tpl.render_async(**ctx)
-            return HTMLResponse(html)
+            return HTMLResponse(
+                html,
+                headers={
+                    "Content-Security-Policy": (
+                        "default-src 'none'; "
+                        "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+                        "https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; "
+                        "style-src 'self' 'unsafe-inline' "
+                        "https://unpkg.com https://cdnjs.cloudflare.com; "
+                        "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
+                        "media-src 'self'; object-src 'none'; frame-src 'none'; "
+                        "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+                    ),
+                    "X-Frame-Options": "DENY",
+                    "X-Content-Type-Options": "nosniff",
+                    "Referrer-Policy": "same-origin",
+                },
+            )
 
         def _parse_fts_query(
             raw: str, scope_preference: str | None = None
@@ -2253,6 +2271,58 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
 
             return {"messages": messages, "projects": projects}
 
+        async def _read_mail_login_form(request: Request) -> dict[str, str]:
+            max_bytes = 8 * 1024
+            media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if media_type != "application/x-www-form-urlencoded":
+                raise HTTPException(
+                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    detail="Mail UI login requires a URL-encoded form",
+                )
+            raw_length = request.headers.get("content-length")
+            if raw_length:
+                try:
+                    content_length = int(raw_length)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid login form length",
+                    ) from exc
+                if content_length < 0 or content_length > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail="Login form is too large",
+                    )
+
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in request.stream():
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail="Login form is too large",
+                    )
+                chunks.append(chunk)
+            try:
+                parsed = parse_qs(
+                    b"".join(chunks).decode("utf-8"),
+                    keep_blank_values=True,
+                    max_num_fields=8,
+                )
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid login form",
+                ) from exc
+            allowed_fields = {"username", "password", "next", "csrf_token"}
+            if set(parsed) - allowed_fields or any(len(values) != 1 for values in parsed.values()):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid login form fields",
+                )
+            return {name: values[0] for name, values in parsed.items()}
+
         @fastapi_app.get("/mail/login", response_class=HTMLResponse)
         async def mail_login_page(request: Request) -> HTMLResponse:
             return await _login_page_response(
@@ -2280,26 +2350,34 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             set_login_csrf_cookie(html, csrf_token, request=request)
             html.headers["Cache-Control"] = "no-store, max-age=0"
             html.headers["Pragma"] = "no-cache"
+            html.headers["Content-Security-Policy"] = (
+                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+                "base-uri 'none'; frame-ancestors 'none'"
+            )
+            html.headers["X-Frame-Options"] = "DENY"
+            html.headers["X-Content-Type-Options"] = "nosniff"
+            html.headers["Referrer-Policy"] = "no-referrer"
             html.status_code = status_code
             return html
 
         @fastapi_app.post("/mail/login")
         async def mail_login_submit(request: Request) -> Response:
-            form = await request.form()
-            username = str(form.get("username") or "")
-            password = str(form.get("password") or "")
-            next_path = sanitize_mail_next_path(str(form.get("next") or "/mail"))
-            csrf_token = str(form.get("csrf_token") or "")
             limiter = getattr(request.app.state, "mail_ui_login_limiter", None)
             client_ip = request.client.host if request.client else "unknown"
             if limiter is not None and not limiter.allow(client_ip):
-                verify_mail_ui_credentials(settings, username, password)
+                verify_mail_ui_credentials(settings, "", "")
                 return await _login_page_response(
                     request,
-                    next_path=next_path,
+                    next_path="/mail",
                     error_message=gettext("Too many sign-in attempts. Try again later."),
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 )
+
+            form = await _read_mail_login_form(request)
+            username = form.get("username", "")
+            password = form.get("password", "")
+            next_path = sanitize_mail_next_path(form.get("next", "/mail"))
+            csrf_token = form.get("csrf_token", "")
             origin_ok = origin_is_same_site(request)
             csrf_ok = verify_login_csrf(request, csrf_token)
             credentials_ok = verify_mail_ui_credentials(settings, username, password)

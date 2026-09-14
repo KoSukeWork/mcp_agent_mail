@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,6 +13,7 @@ from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.config import ConfigError
 from mcp_agent_mail.http import build_http_app
 from mcp_agent_mail.ui_auth import (
+    LoginAttemptLimiter,
     parse_session_cookie,
     sanitize_mail_next_path,
     session_signing_key,
@@ -27,6 +29,22 @@ _RPC_HEALTH = {
     "method": "tools/call",
     "params": {"name": "health_check", "arguments": {}},
 }
+
+
+def test_authenticated_ui_external_assets_are_versioned_and_integrity_checked() -> None:
+    template = (
+        Path(__file__).parents[1] / "src/mcp_agent_mail/templates/base.html"
+    ).read_text(encoding="utf-8")
+    external_tags = re.findall(
+        r'<(?:script|link)\b[^>]*(?:src|href)="https://[^>]+>',
+        template,
+    )
+    assert external_tags
+    assert all('integrity="sha384-' in tag for tag in external_tags)
+    assert all('crossorigin="anonymous"' in tag for tag in external_tags)
+    assert "@latest" not in template
+    assert "@3.x.x" not in template
+    assert "cdn.tailwindcss.com" not in template
 
 
 def test_sanitize_mail_next_path_rejects_open_redirects() -> None:
@@ -64,6 +82,25 @@ def test_session_cookie_roundtrip_and_tamper(isolated_env, monkeypatch) -> None:
     assert parse_session_cookie(expired, secret=secret, now=20) is None
 
 
+def test_password_rotation_revokes_existing_session(isolated_env, monkeypatch) -> None:
+    monkeypatch.setenv("MAIL_UI_PASSWORD", "old-password")
+    monkeypatch.setenv("MAIL_UI_SESSION_SECRET", _SESSION_SECRET)
+    _config.clear_settings_cache()
+    old_key = session_signing_key(_config.get_settings())
+    assert old_key is not None
+    token = sign_session_payload(
+        {"v": 1, "u": "operator", "csrf": "c" * 32, "exp": 2_000_000_000},
+        secret=old_key,
+    )
+
+    monkeypatch.setenv("MAIL_UI_PASSWORD", "new-password")
+    _config.clear_settings_cache()
+    new_key = session_signing_key(_config.get_settings())
+    assert new_key is not None
+    assert new_key != old_key
+    assert parse_session_cookie(token, secret=new_key, now=1_900_000_000) is None
+
+
 def test_password_requires_session_secret(isolated_env, monkeypatch) -> None:
     monkeypatch.setenv("MAIL_UI_PASSWORD", "ui-secret-ok")
     monkeypatch.setenv("MAIL_UI_SESSION_SECRET", "")
@@ -77,6 +114,14 @@ def test_session_secret_rejects_short_value(isolated_env, monkeypatch) -> None:
     monkeypatch.setenv("MAIL_UI_SESSION_SECRET", "too-short")
     _config.clear_settings_cache()
     with pytest.raises(ConfigError, match="at least 32"):
+        _config.get_settings()
+
+
+def test_session_secret_requires_password(isolated_env, monkeypatch) -> None:
+    monkeypatch.setenv("MAIL_UI_PASSWORD", "")
+    monkeypatch.setenv("MAIL_UI_SESSION_SECRET", "x")
+    _config.clear_settings_cache()
+    with pytest.raises(ConfigError, match="must not be set without MAIL_UI_PASSWORD"):
         _config.get_settings()
 
 
@@ -131,6 +176,10 @@ async def test_mail_login_is_reachable_without_bearer(isolated_env, monkeypatch)
         assert "Sign in to Agent Mail" in response.text
         assert "cdn.tailwindcss.com" not in response.text
         assert "cdn.jsdelivr.net" not in response.text
+        assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["referrer-policy"] == "no-referrer"
         blocked = await client.get("/mail", follow_redirects=False)
         assert blocked.status_code == 303
         assert str(blocked.headers.get("location", "")).startswith("/mail/login")
@@ -157,6 +206,9 @@ async def test_mail_login_success_and_logout(isolated_env, monkeypatch) -> None:
         home = await client.get("/mail")
         assert home.status_code == 200
         assert "no-store" in (home.headers.get("cache-control") or "")
+        assert "connect-src 'self'" in home.headers["content-security-policy"]
+        assert "frame-ancestors 'none'" in home.headers["content-security-policy"]
+        assert home.headers["x-frame-options"] == "DENY"
         assert "Sign out" in home.text
         mcp = await client.post(settings.http.path, json=_RPC_HEALTH)
         assert mcp.status_code == 401
@@ -224,6 +276,64 @@ async def test_mail_login_rate_limit(isolated_env, monkeypatch) -> None:
         assert "Too many sign-in attempts" in last.text
 
 
+def test_login_attempt_limiter_bounds_and_expires_state() -> None:
+    now = [0.0]
+    limiter = LoginAttemptLimiter(
+        per_minute=10,
+        max_entries=2,
+        state_ttl_seconds=60.0,
+        monotonic=lambda: now[0],
+    )
+
+    assert limiter.allow("192.0.2.1") is True
+    assert limiter.allow("192.0.2.2") is True
+    assert limiter.allow("192.0.2.3") is False
+    assert limiter.entry_count == 2
+
+    now[0] = 61.0
+    assert limiter.allow("192.0.2.3") is True
+    assert limiter.entry_count == 1
+
+
+@pytest.mark.asyncio
+async def test_mail_login_rejects_oversized_form(isolated_env, monkeypatch) -> None:
+    client, _settings = await _build_client(monkeypatch)
+    async with client:
+        response = await client.post(
+            "/mail/login",
+            content=b"password=" + (b"x" * 8192),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert response.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_mail_login_checks_rate_limit_before_reading_form(
+    isolated_env, monkeypatch
+) -> None:
+    monkeypatch.setenv("MAIL_UI_LOGIN_RATE_LIMIT_PER_MINUTE", "1")
+    client, _settings = await _build_client(monkeypatch)
+    async with client:
+        page = await client.get("/mail/login")
+        first = await client.post(
+            "/mail/login",
+            data={
+                "username": "operator",
+                "password": "wrong",
+                "next": "/mail",
+                "csrf_token": _csrf_from_html(page.text),
+            },
+        )
+        assert first.status_code == 200
+
+        limited = await client.post(
+            "/mail/login",
+            content=b"password=" + (b"x" * 8192),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert limited.status_code == 429
+
+
 @pytest.mark.asyncio
 async def test_mail_api_requires_csrf_after_login(isolated_env, monkeypatch) -> None:
     client, _settings = await _build_client(monkeypatch)
@@ -281,3 +391,29 @@ async def test_loopback_without_password_rejects_cross_origin_writes(
         assert cross_site.status_code == 403
         local = await client.post("/mail/api/delete-messages", json={"message_ids": [1]})
         assert local.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_passwordless_loopback_rejects_dns_rebinding_host(
+    isolated_env, monkeypatch
+) -> None:
+    monkeypatch.setenv("MAIL_UI_PASSWORD", "")
+    monkeypatch.setenv("MAIL_UI_SESSION_SECRET", "")
+    _config.clear_settings_cache()
+
+    app = build_http_app(_config.get_settings(), build_mcp_server())
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://evil.example:8765",
+        follow_redirects=False,
+    ) as client:
+        read_response = await client.get("/mail")
+        assert read_response.status_code == 303
+        assert read_response.headers["location"].startswith("/mail/login")
+
+        write_response = await client.post(
+            "/mail/api/delete-messages",
+            json={"message_ids": [1]},
+            headers={"Origin": "http://evil.example:8765"},
+        )
+        assert write_response.status_code == 401

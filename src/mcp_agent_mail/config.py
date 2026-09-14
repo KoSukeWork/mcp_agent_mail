@@ -409,7 +409,12 @@ def _mail_ui_session_secret(value: str | None, *, password: str | None) -> str |
     secret = (value or "").strip() or None
     password_set = bool((password or "").strip())
     if not password_set:
-        return secret
+        if secret is not None:
+            raise ConfigError(
+                "MAIL_UI_SESSION_SECRET must not be set without MAIL_UI_PASSWORD; "
+                "passwordless loopback mode does not issue or accept sessions."
+            )
+        return None
     if secret is None:
         raise ConfigError(
             "MAIL_UI_SESSION_SECRET is required when MAIL_UI_PASSWORD is set; "

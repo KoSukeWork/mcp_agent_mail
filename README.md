@@ -398,6 +398,9 @@ Auth notes:
 - GET pages in the UI are not gated by the RBAC middleware (it classifies POSTed MCP calls only).
 - `HTTP_BEARER_TOKEN` and JWT protect MCP HTTP routes. They do not gate `/mail`.
 - The human mail UI uses an independent cookie session. Set `MAIL_UI_PASSWORD` and open `/mail/login`.
+- Passwordless mail access accepts only direct loopback connections using a literal loopback Host; configure a password behind any proxy or non-loopback hostname.
+- `MAIL_UI_SESSION_SECRET` must be blank without a UI password. Changing either the password or secret invalidates existing UI sessions.
+- Authenticated UI CDN resources are exact-version pinned with SHA-384 SRI, and mail pages restrict resource and network origins with CSP.
 - For local MCP clients without a header, set `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED=true`.
 - Health endpoints are always open at `/health/*`.
 

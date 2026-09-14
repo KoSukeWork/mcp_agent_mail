@@ -28,11 +28,6 @@
       })();
     </script>
 
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-
     <script>
       (function () {
         try {
@@ -49,212 +44,131 @@
       })();
     </script>
 
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
-            },
-            colors: {
-              primary: {
-                50: '#eef2ff',
-                100: '#e0e7ff',
-                200: '#c7d2fe',
-                300: '#a5b4fc',
-                400: '#818cf8',
-                500: '#6366f1',
-                600: '#4f46e5',
-                700: '#4338ca',
-                800: '#3730a3',
-                900: '#312e81',
-                950: '#1e1b4b',
-              },
-              success: {
-                50: '#f0fdf4',
-                100: '#dcfce7',
-                200: '#bbf7d0',
-                300: '#86efac',
-                400: '#4ade80',
-                500: '#10b981',
-                600: '#059669',
-                700: '#047857',
-                800: '#065f46',
-                900: '#064e3b',
-                950: '#022c22',
-              },
-              warning: {
-                50: '#fffbeb',
-                100: '#fef3c7',
-                200: '#fde68a',
-                300: '#fcd34d',
-                400: '#fbbf24',
-                500: '#f59e0b',
-                600: '#d97706',
-                700: '#b45309',
-                800: '#92400e',
-                900: '#78350f',
-                950: '#451a03',
-              },
-              danger: {
-                50: '#fef2f2',
-                100: '#fee2e2',
-                200: '#fecaca',
-                300: '#fca5a5',
-                400: '#f87171',
-                500: '#ef4444',
-                600: '#dc2626',
-                700: '#b91c1c',
-                800: '#991b1b',
-                900: '#7f1d1d',
-                950: '#450a0a',
-              },
-            },
-            boxShadow: {
-              'soft': '0 2px 8px 0 rgba(0, 0, 0, 0.05)',
-              'medium': '0 4px 16px 0 rgba(0, 0, 0, 0.08)',
-              'large': '0 8px 32px 0 rgba(0, 0, 0, 0.12)',
-              'glow': '0 0 20px rgba(99, 102, 241, 0.3)',
-            },
-            animation: {
-              'fade-in': 'fadeIn 0.2s ease-in-out',
-              'slide-up': 'slideUp 0.3s ease-out',
-              'slide-down': 'slideDown 0.3s ease-out',
-              'scale-in': 'scaleIn 0.2s ease-out',
-              'shimmer': 'shimmer 2s infinite',
-            },
-            keyframes: {
-              fadeIn: {
-                '0%': { opacity: '0' },
-                '100%': { opacity: '1' },
-              },
-              slideUp: {
-                '0%': { transform: 'translateY(10px)', opacity: '0' },
-                '100%': { transform: 'translateY(0)', opacity: '1' },
-              },
-              slideDown: {
-                '0%': { transform: 'translateY(-10px)', opacity: '0' },
-                '100%': { transform: 'translateY(0)', opacity: '1' },
-              },
-              scaleIn: {
-                '0%': { transform: 'scale(0.95)', opacity: '0' },
-                '100%': { transform: 'scale(1)', opacity: '1' },
-              },
-              shimmer: {
-                '0%': { backgroundPosition: '-1000px 0' },
-                '100%': { backgroundPosition: '1000px 0' },
-              },
-            },
-          },
-        },
+    <!-- Tailwind CSS browser runtime, pinned and integrity-checked. -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.js" integrity="sha384-2ql948lIdLcGEE0/qxNiudyTjgauA3RDJERu5xW75kFCvSl5a9odyQYCb6tEjnmB" crossorigin="anonymous"></script>
+    <style type="text/tailwindcss">
+      @custom-variant dark (&:where(.dark, .dark *));
+      @theme {
+        --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --color-primary-50: #eef2ff;
+        --color-primary-100: #e0e7ff;
+        --color-primary-200: #c7d2fe;
+        --color-primary-300: #a5b4fc;
+        --color-primary-400: #818cf8;
+        --color-primary-500: #6366f1;
+        --color-primary-600: #4f46e5;
+        --color-primary-700: #4338ca;
+        --color-primary-800: #3730a3;
+        --color-primary-900: #312e81;
+        --color-primary-950: #1e1b4b;
+        --color-success-50: #f0fdf4;
+        --color-success-100: #dcfce7;
+        --color-success-200: #bbf7d0;
+        --color-success-300: #86efac;
+        --color-success-400: #4ade80;
+        --color-success-500: #10b981;
+        --color-success-600: #059669;
+        --color-success-700: #047857;
+        --color-success-800: #065f46;
+        --color-success-900: #064e3b;
+        --color-success-950: #022c22;
+        --color-warning-50: #fffbeb;
+        --color-warning-100: #fef3c7;
+        --color-warning-200: #fde68a;
+        --color-warning-300: #fcd34d;
+        --color-warning-400: #fbbf24;
+        --color-warning-500: #f59e0b;
+        --color-warning-600: #d97706;
+        --color-warning-700: #b45309;
+        --color-warning-800: #92400e;
+        --color-warning-900: #78350f;
+        --color-warning-950: #451a03;
+        --color-danger-50: #fef2f2;
+        --color-danger-100: #fee2e2;
+        --color-danger-200: #fecaca;
+        --color-danger-300: #fca5a5;
+        --color-danger-400: #f87171;
+        --color-danger-500: #ef4444;
+        --color-danger-600: #dc2626;
+        --color-danger-700: #b91c1c;
+        --color-danger-800: #991b1b;
+        --color-danger-900: #7f1d1d;
+        --color-danger-950: #450a0a;
+        --shadow-soft: 0 2px 8px 0 rgb(0 0 0 / 0.05);
+        --shadow-medium: 0 4px 16px 0 rgb(0 0 0 / 0.08);
+        --shadow-large: 0 8px 32px 0 rgb(0 0 0 / 0.12);
+        --shadow-glow: 0 0 20px rgb(99 102 241 / 0.3);
+        --animate-fade-in: fadeIn 0.2s ease-in-out;
+        --animate-slide-up: slideUp 0.3s ease-out;
+        --animate-slide-down: slideDown 0.3s ease-out;
+        --animate-scale-in: scaleIn 0.2s ease-out;
+        --animate-shimmer: shimmer 2s infinite;
       }
-    </script>
+      @keyframes fadeIn {
+        0% { opacity: 0; }
+        100% { opacity: 1; }
+      }
+      @keyframes slideUp {
+        0% { transform: translateY(10px); opacity: 0; }
+        100% { transform: translateY(0); opacity: 1; }
+      }
+      @keyframes slideDown {
+        0% { transform: translateY(-10px); opacity: 0; }
+        100% { transform: translateY(0); opacity: 1; }
+      }
+      @keyframes scaleIn {
+        0% { transform: scale(0.95); opacity: 0; }
+        100% { transform: scale(1); opacity: 1; }
+      }
+      @keyframes shimmer {
+        0% { background-position: -1000px 0; }
+        100% { background-position: 1000px 0; }
+      }
+    </style>
 
     <!-- Alpine.js (collapse plugin must load before core) -->
-    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js" integrity="sha384-NArNwzWsUSF+kY2lgW4YriEkjLqi+J+za6HrENUn/3nZqkBnWbxV22kCJEK5Uu6n" crossorigin="anonymous"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.17.2/dist/cdn.min.js" integrity="sha384-lcaMFHdvRVsEXVuhit4fTnbxq6eTLm5HPdNzO7vXNZjr8HOCMouPmv4hSGF3PCJV" crossorigin="anonymous"></script>
 
     <!-- Lucide Icons -->
-    <script defer src="https://unpkg.com/lucide@latest"></script>
+    <script defer src="https://unpkg.com/lucide@1.45.0/dist/umd/lucide.min.js" integrity="sha384-1K5mjRr9EvBwlp0ALeQf1DEysXoqYs+nRQmDBi/UrEty5RgCjPRph7NJZkRjAFWJ" crossorigin="anonymous"></script>
 
     <!-- Prism.js for code highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-markdown.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" integrity="sha384-wFjoQjtV1y5jVHbt0p35Ui8aV8GVpEZkyF99OXWqP/eNJDU93D3Ugxkoyh6Y2I4A" crossorigin="anonymous" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha384-06z5D//U/xpvxZHuUz92xBvq3DqBBFi7Up53HRrbV7Jlv7Yvh/MZ7oenfUe9iCEt" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js" integrity="sha384-WJdEkJKrbsqw0evQ4GB6mlsKe5cGTxBOw4KAEIa52ZLB7DDpliGkwdme/HMa5n1m" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js" integrity="sha384-RhrmFFMb0ZCHImjFMpR/UE3VEtIVTCtNrtKQqXCzqXZNJala02N3UbVhi+qzw3CY" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-markdown.min.js" integrity="sha384-s888ApkYHxfPsp8n81g77Unl/0XYnYltLvWbwqKHcheRE8/dZPlT4IjW3mRGv/Hd" crossorigin="anonymous"></script>
 
     <!-- Marked.js for markdown rendering -->
-    <script src="https://cdn.jsdelivr.net/npm/marked@11/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.2.0/marked.min.js" integrity="sha384-9Md4MlJk24bo2Ifubp0FbKhuES4/iAwyTGMeWpBG4RoHGTKygpEGEpOYhEQxbfa9" crossorigin="anonymous"></script>
 
     <!-- DOMPurify for HTML sanitization (prevent XSS in markdown previews) -->
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js" integrity="sha384-uUMu9JDY09vBzRf9SPcK2VgUj+W/70J6Soc+Dded5P474ElQ63iv9j5N3DE7Kp3N" crossorigin="anonymous"></script>
 
     <!-- Day.js for date formatting (lightweight utility) -->
-    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/relativeTime.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/calendar.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js" integrity="sha384-DpVxUeeBWjUvUV1czyIHJAjh+jYUZFu2lLakbdua5vbwOrBGi1UgaKCHjTC+x3Ky" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/relativeTime.min.js" integrity="sha384-vKerUi5OCpHqrrB94OiqdEjkyS5mc6nmgIo0zpddqoPEhV/fW+h7Srkcxq3BVVHo" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/calendar.min.js" integrity="sha384-R2v6EnP1AvQUIs7kG9XB8pK8nbqAxfdaecMZAjnecM03oyeUnqO3wR78mqntmZLt" crossorigin="anonymous"></script>
     {% if current_locale() == 'zh-CN' %}
-    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/locale/zh-cn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/locale/zh-cn.min.js" integrity="sha384-MFpFxl1kKRYG95IncC48NdG5HhP8aMxwZonKGUnRrz1zMivjv87ZSMyGOVZ5J6wx" crossorigin="anonymous"></script>
     {% endif %}
 
     <!-- Tippy.js for beautiful tooltips -->
-    <script src="https://unpkg.com/@popperjs/core@2"></script>
-    <script src="https://unpkg.com/tippy.js@6"></script>
-    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/dist/tippy.css" />
-    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/themes/light.css" />
-    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/animations/scale.css" />
+    <script src="https://unpkg.com/tippy.js@6.3.7/dist/tippy-bundle.umd.min.js" integrity="sha384-AiTRpehQ7zqeua0Ypfa6Q4ki/ddhczZxrKtiQbTQUlJIhBkTeyoZP9/W/5ulFt29" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6.3.7/dist/tippy.css" integrity="sha384-IBgYl+I5X6ZDZXI5zv1vsSE3VopDomz4BxSu/GlxaPHfFtcrJ3uj70z1w6srO9zU" crossorigin="anonymous" />
+    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6.3.7/themes/light.css" integrity="sha384-O3zpKcmNU1sKUh+lNrViF6kgcRBBz27MhfBgmK1g1Te/UNvsu7l+jGYeNK9vXpKj" crossorigin="anonymous" />
+    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6.3.7/animations/scale.css" integrity="sha384-8N4IYsfQ62z/mL0F4DjUmQ/Zf5ezlpJAEwFWjgA0uLAtYXBZjyTiTARsn1MbBlRQ" crossorigin="anonymous" />
 
     <!-- NProgress for loading indicators -->
-    <script src="https://unpkg.com/nprogress@0.2.0/nprogress.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/nprogress@0.2.0/nprogress.css" />
-
-    <!-- Chart.js for data visualization -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-
-    <!-- Anime.js for advanced animations -->
-    <script src="https://cdn.jsdelivr.net/npm/animejs@3.2.1/lib/anime.min.js"></script>
-
-    <!-- SortableJS for drag and drop -->
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+    <script src="https://unpkg.com/nprogress@0.2.0/nprogress.js" integrity="sha384-Khp+WGU135XsFuEWvnA1WVJNvQ7T6CI9uxs+8RZes7B2JOmM5kjifb3AJ6V3JxY8" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="https://unpkg.com/nprogress@0.2.0/nprogress.css" integrity="sha384-pwTVmaXgbbFRCYPBh1yaHpccJ0KzibGT/RTD3LUT0gjddQ1UkDxcimqlUvZaziZP" crossorigin="anonymous" />
 
     <!-- Fuse.js for fuzzy search -->
-    <script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js" integrity="sha384-PCSoOZTpbkikBEtd/+uV3WNdc676i9KUf01KOA8CnJotvlx8rRrETbDuwdjqTYvt" crossorigin="anonymous"></script>
 
     <!-- Hotkeys.js for keyboard shortcuts -->
-    <script src="https://unpkg.com/hotkeys-js@3.13.7/dist/hotkeys.min.js"></script>
-
-    <!-- Particles.js for background effects -->
-    <script src="https://cdn.jsdelivr.net/npm/particles.js@2.0.0/particles.min.js"></script>
-
-    <!-- CountUp.js for number animations -->
-    <script src="https://cdn.jsdelivr.net/npm/countup@1.8.2/dist/countUp.min.js"></script>
-
-    <!-- Mo.js for micro-animations -->
-    <script defer src="https://cdn.jsdelivr.net/npm/@mojs/core@1.7.1/dist/mo.umd.js"></script>
-
-    <!-- Splitting.js for advanced text animations -->
-    <script src="https://unpkg.com/splitting@1.0.6/dist/splitting.min.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/splitting@1.0.6/dist/splitting.css" />
-
-    <!-- Mermaid.js for git graphs and diagrams -->
-    <script type="module">
-      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-      window.mermaid = mermaid;
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: 'base',
-        themeVariables: {
-          primaryColor: '#6366f1',
-          primaryTextColor: '#fff',
-          primaryBorderColor: '#4f46e5',
-          lineColor: '#6366f1',
-          secondaryColor: '#818cf8',
-          tertiaryColor: '#a5b4fc',
-          background: '#ffffff',
-          mainBkg: '#6366f1',
-          secondBkg: '#818cf8',
-          tertiaryBkg: '#a5b4fc'
-        },
-        gitGraph: {
-          rotateCommitLabel: false,
-          mainBranchName: 'main',
-          showBranches: true,
-          showCommitLabel: true
-        }
-      });
-    </script>
-
-    <!-- Diff2Html for beautiful git diffs -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html@3.4.47/bundles/css/diff2html.min.css" />
-    <script src="https://cdn.jsdelivr.net/npm/diff2html@3.4.47/bundles/js/diff2html-ui.min.js"></script>
-
-    <!-- Vis.js for network graphs -->
-    <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
-    <link href="https://unpkg.com/vis-network@9.1.9/styles/vis-network.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://unpkg.com/hotkeys-js@3.13.7/dist/hotkeys.min.js" integrity="sha384-sEDMZQTPyHjKRqJDJ3uRzZ8fKsX7dJvacMzLCEUO9j2JtdeTvCeDoUR181LyDr5O" crossorigin="anonymous"></script>
 
     <style>
       /* Long project paths must yield space to navigation controls, not wrap them. */
