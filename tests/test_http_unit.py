@@ -138,6 +138,8 @@ def test_unified_inbox_dynamic_controls_render(rendered_unified_inbox):
     fullscreen = next(expr for expr in parser.text_expressions if expr.startswith("isFullscreen ?"))
     assert json.dumps(gettext("Fullscreen")) in fullscreen
     assert json.dumps(gettext("Exit fullscreen")) in fullscreen
+    assert "messageAriaLabel(msg)" in parser.expressions
+    assert not any("=> msg.sender" in expression for expression in parser.expressions)
     for source in ("Inbox refreshed", "Updated just now", "Updated {count}m ago"):
         assert json.dumps(gettext(source)) in html
     assert len(parser.scripts) >= 5

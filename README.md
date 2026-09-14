@@ -401,6 +401,7 @@ Auth notes:
 - Passwordless mail access accepts only direct loopback connections using a literal loopback Host; configure a password behind any proxy or non-loopback hostname.
 - `MAIL_UI_SESSION_SECRET` must be blank without a UI password. Changing the username, password, secret, or session TTL invalidates existing UI sessions; logout also revokes the current session in the database so a copied cookie cannot be replayed.
 - The archive Viewer executes only package-owned scripts/styles and uses system fonts. The authenticated Mail UI self-hosts Tailwind and Alpine; its remaining exact-version CDN assets carry SHA-384 SRI and are constrained by CSP.
+- The Viewer grants only the narrow `wasm-unsafe-eval` script capability required by its package-owned sql.js WebAssembly runtime; general JavaScript `unsafe-eval` remains disabled.
 - Tailwind utility CSS is precompiled for both the authenticated Mail UI and standalone archive Viewer. Run `npm ci --ignore-scripts` and `npm run build:web-assets` after template or Viewer class changes; generated CSS and the Viewer's Alpine/Lucide bundles are package-owned and CI-verified.
 - Authenticated Mail UI scripts use per-response CSP nonces and the package-owned Alpine CSP build; `script-src` does not permit `unsafe-inline` or `unsafe-eval`.
 - The built-in launcher is single-process. Multi-worker or multi-replica deployments must set `HTTP_RATE_LIMIT_BACKEND=redis` and `HTTP_RATE_LIMIT_REDIS_URL`; this shares MCP and Mail UI login limits and both fail closed while Redis is unavailable.

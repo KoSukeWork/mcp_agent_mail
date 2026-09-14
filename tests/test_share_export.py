@@ -1011,6 +1011,9 @@ def test_viewer_executes_only_package_owned_assets() -> None:
     script_src = csp.split("script-src ", maxsplit=1)[1].split(";", maxsplit=1)[0]
     assert "'unsafe-inline'" not in script_src
     assert "'unsafe-eval'" not in script_src
+    assert "'wasm-unsafe-eval'" in script_src
+    sql_wasm = (viewer_root / "vendor" / "sql-wasm.js").read_text(encoding="utf-8")
+    assert "WebAssembly.instantiate" in sql_wasm
     for script in re.findall(r"<script>([\s\S]*?)</script>", html):
         canonical_script = script.replace("\r\n", "\n")
         digest = base64.b64encode(hashlib.sha256(canonical_script.encode()).digest()).decode()

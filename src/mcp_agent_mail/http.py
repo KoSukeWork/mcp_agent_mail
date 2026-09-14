@@ -1563,6 +1563,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         max_entries=int(settings.http.mail_ui_login_max_tracked_clients),
         redis_client=shared_rate_limit_redis,
         redis_prefix=settings.http.rate_limit_redis_prefix,
+        redis_socket_timeout_seconds=settings.http.rate_limit_redis_socket_timeout_seconds,
     )
     app_mail_ui.add_middleware(MailUIAuthMiddleware, settings=settings)
 

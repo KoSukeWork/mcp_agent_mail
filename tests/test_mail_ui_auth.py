@@ -642,6 +642,45 @@ async def test_login_attempt_limiter_uses_shared_redis_backend(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_http_app_propagates_redis_timeout_to_login_limiter(
+    isolated_env,
+    monkeypatch,
+) -> None:
+    class FakeRedis:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    fake_redis = FakeRedis()
+    factory_options: dict[str, object] = {}
+
+    def fake_factory(redis_url: str, **kwargs):
+        factory_options.update(url=redis_url, **kwargs)
+        return fake_redis
+
+    monkeypatch.setenv("HTTP_RATE_LIMIT_BACKEND", "redis")
+    monkeypatch.setenv("HTTP_RATE_LIMIT_REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("HTTP_RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS", "7")
+    monkeypatch.setenv("HTTP_RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS", "19")
+    _config.clear_settings_cache()
+    settings = _config.get_settings()
+    monkeypatch.setattr(http_module, "create_rate_limit_redis_client", fake_factory)
+
+    app = build_http_app(settings, build_mcp_server())
+    limiter = app.state.mail_ui_login_limiter
+    assert limiter._redis_operation_timeout_seconds == 19.0
+    assert factory_options == {
+        "url": "redis://localhost:6379/0",
+        "connect_timeout_seconds": 7,
+        "socket_timeout_seconds": 19,
+    }
+    await app.state.rate_limit_redis_client.aclose()
+    assert fake_redis.closed is True
+
+
+@pytest.mark.asyncio
 async def test_hung_redis_login_limiter_returns_503_promptly(isolated_env, monkeypatch) -> None:
     class HungRedis:
         async def eval(self, *_args):

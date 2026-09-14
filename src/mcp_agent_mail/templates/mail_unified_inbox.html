@@ -314,7 +314,7 @@
                  :style="'animation-delay: ' + Math.min(index * 0.02, 0.5) + 's;'"
                    tabindex="0"
                    role="button"
-               :aria-label='{{ _("Message from {sender}: {subject}") | tojson }}.replace("{sender}", () => msg.sender).replace("{subject}", () => msg.subject)'>
+            :aria-label="messageAriaLabel(msg)">
 
                 <div class="flex items-start gap-3">
                   <!-- Checkbox -->
@@ -1129,6 +1129,12 @@ function unifiedInboxManager() {
     resetAllFilters() {
       this.searchQuery = '';
       this.clearFilters();
+    },
+
+    messageAriaLabel(msg) {
+      return {{ _("Message from {sender}: {subject}") | tojson }}
+        .replace('{sender}', () => String(msg.sender || ''))
+        .replace('{subject}', () => String(msg.subject || ''));
     },
 
     // View Mode
