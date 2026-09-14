@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}{{ _("Agent Mail") }}{% endblock %}</title>
     <meta name="csrf-token" content="{{ mail_ui_csrf() if mail_ui_csrf is defined else '' }}" />
-    <script>
+    <script nonce="{{ csp_nonce }}">
       (function () {
         const originalFetch = window.fetch.bind(window);
         window.fetch = function (input, init) {
@@ -28,7 +28,7 @@
       })();
     </script>
 
-    <script>
+    <script nonce="{{ csp_nonce }}">
       (function () {
         try {
           const stored = localStorage.getItem('darkMode');
@@ -47,9 +47,9 @@
     <!-- Precompiled, package-owned Tailwind CSS. -->
     <link rel="stylesheet" href="/mail/assets/mail-tailwind.css" />
 
-    <!-- Alpine.js (collapse plugin must load before core) -->
-    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.15.12/dist/cdn.min.js" integrity="sha384-NArNwzWsUSF+kY2lgW4YriEkjLqi+J+za6HrENUn/3nZqkBnWbxV22kCJEK5Uu6n" crossorigin="anonymous"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.17.2/dist/cdn.min.js" integrity="sha384-lcaMFHdvRVsEXVuhit4fTnbxq6eTLm5HPdNzO7vXNZjr8HOCMouPmv4hSGF3PCJV" crossorigin="anonymous"></script>
+    <!-- Package-owned Alpine CSP build (collapse plugin must load before core) -->
+    <script defer src="/mail/assets/alpine-collapse.min.js" integrity="sha384-NArNwzWsUSF+kY2lgW4YriEkjLqi+J+za6HrENUn/3nZqkBnWbxV22kCJEK5Uu6n" crossorigin="anonymous"></script>
+    <script defer src="/mail/assets/alpine-csp.min.js" integrity="sha384-kWTzsVwMm5SQeDmCv4DpGqQuKHE6MPWr6MM9R6cJg1CHF3xPbmjZX3ZTS6OB0EZu" crossorigin="anonymous"></script>
 
     <!-- Lucide Icons -->
     <script defer src="https://unpkg.com/lucide@1.45.0/dist/umd/lucide.min.js" integrity="sha384-1K5mjRr9EvBwlp0ALeQf1DEysXoqYs+nRQmDBi/UrEty5RgCjPRph7NJZkRjAFWJ" crossorigin="anonymous"></script>
@@ -91,7 +91,7 @@
     <!-- Hotkeys.js for keyboard shortcuts -->
     <script src="https://unpkg.com/hotkeys-js@3.13.7/dist/hotkeys.min.js" integrity="sha384-sEDMZQTPyHjKRqJDJ3uRzZ8fKsX7dJvacMzLCEUO9j2JtdeTvCeDoUR181LyDr5O" crossorigin="anonymous"></script>
 
-    <style>
+    <style nonce="{{ csp_nonce }}">
       /* Long project paths must yield space to navigation controls, not wrap them. */
       .app-header-layout {
         display: flex;
@@ -933,7 +933,7 @@
                     class="w-full px-6 py-4 flex items-center gap-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all duration-150 text-left group">
               <div :class="command.iconColor || 'text-slate-400'"
                     class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                   :style="`background: ${command.iconBg || 'rgba(148, 163, 184, 0.1)'}`">
+                    :style="'background: ' + (command.iconBg || 'rgba(148, 163, 184, 0.1)')">
                 <i :data-lucide="command.icon" class="w-5 h-5"></i>
               </div>
               <div class="flex-1 min-w-0">
@@ -1001,11 +1001,8 @@
                rgba(0, 0, 0, 0.9) calc(var(--spotlight-size, 150px) + 100px)
              );
            "
-           :style="`
-             --spotlight-x: ${spotlightX}px;
-             --spotlight-y: ${spotlightY}px;
-             --spotlight-size: ${spotlightSize}px;
-           `"></div>
+                  :style="'--spotlight-x: ' + spotlightX + 'px; --spotlight-y: ' + spotlightY + 'px; --spotlight-size: ' + spotlightSize + 'px;'">
+                </div>
 
       <!-- Tutorial Panel -->
       <div x-show="isActive"
@@ -1018,7 +1015,7 @@
         <div class="relative h-2 bg-slate-200 dark:bg-slate-700 overflow-hidden">
           <div class="absolute inset-0 bg-gradient-to-r from-primary-500 via-purple-500 to-pink-500 animate-gradient-x opacity-20"></div>
           <div class="relative h-full bg-gradient-to-r from-primary-500 via-purple-500 to-pink-500 transition-all duration-700 ease-out shadow-glow"
-               :style="`width: ${progress}%`">
+                          :style="'width: ' + progress + '%'">
             <!-- Shimmer effect -->
             <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer"></div>
           </div>
@@ -1035,13 +1032,13 @@
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-4">
               <div class="w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm float">
-                <i :data-lucide="steps[currentStep]?.icon || 'help-circle'" class="w-7 h-7"></i>
+                        <i :data-lucide="(steps[currentStep] && steps[currentStep].icon) || 'help-circle'" class="w-7 h-7"></i>
               </div>
               <div>
                 <div class="text-sm font-medium text-primary-100 mb-1">
                   {{ _('Step') }} <span x-text="currentStep + 1"></span> / <span x-text="steps.length"></span>
                 </div>
-                <h2 class="text-2xl font-bold" x-text="steps[currentStep]?.title"></h2>
+                <h2 class="text-2xl font-bold" x-text="steps[currentStep] && steps[currentStep].title"></h2>
               </div>
             </div>
             <button @click="skip()"
@@ -2047,7 +2044,7 @@
                    'bg-warning-500': toast.type === 'warning',
                    'bg-primary-500': toast.type === 'info'
                  }"
-                 :style="`width: ${toast.progress}%`">
+                  :style="'width: ' + toast.progress + '%'">
             </div>
           </div>
         </div>
@@ -2156,7 +2153,7 @@
     </footer>
 
     <!-- Alpine.js Components -->
-    <script>
+    <script nonce="{{ csp_nonce }}">
       function switchInterfaceLanguage(locale) {
         const url = new URL(window.location.href);
         url.searchParams.set('lang', locale);

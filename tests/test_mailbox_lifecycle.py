@@ -484,7 +484,11 @@ async def test_mailbox_controls_execute_in_both_languages(isolated_env, locale, 
     await make_project()
     async with AsyncClient(transport=ASGITransport(app=build_http_app(get_settings())), base_url="http://test") as client:
         html = (await client.get(f"{page}?lang={locale}")).text
-    script = re.search(r"<script>\s*(function mailboxManager\(\).*?)</script>", html, re.S)
+    script = re.search(
+        r"<script\b[^>]*>\s*(function mailboxManager\(\).*?)</script>",
+        html,
+        re.S,
+    )
     assert script is not None
     program = script.group(1) + "\n" + f"""
 const assert = require('node:assert/strict');

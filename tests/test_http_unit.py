@@ -32,7 +32,7 @@ def test_project_header_preserves_long_path_and_layout_regions(locale):
     token = set_interface_locale(locale)
     try:
         html = env.get_template("mail_project.html").render(
-            _=gettext, current_locale=get_interface_locale,
+            _=gettext, current_locale=get_interface_locale, csp_nonce="test-nonce",
             project={"id": 1, "slug": "long-project", "human_key": path,
                      "created_at": "2026-09-08", "archived_at": None},
             agents=[], results=[], q="", scope="", order="", boost="",
@@ -122,7 +122,8 @@ def rendered_unified_inbox(request):
     token = set_interface_locale(locale)
     try:
         html = env.get_template("mail_unified_inbox.html").render(
-            _=gettext, current_locale=get_interface_locale, projects=[], messages=[],
+            _=gettext, current_locale=get_interface_locale, csp_nonce="test-nonce",
+            projects=[], messages=[],
             project_cards=[], mailboxes=[], category="all",
         )
         yield locale, html
@@ -228,7 +229,11 @@ def test_tutorial_translates_all_steps_and_dynamic_controls(locale):
     env = Environment(autoescape=True, undefined=StrictUndefined)
     token = set_interface_locale(locale)
     try:
-        rendered = env.from_string(source).render(_=gettext, current_locale=get_interface_locale)
+        rendered = env.from_string(source).render(
+            _=gettext,
+            current_locale=get_interface_locale,
+            csp_nonce="test-nonce",
+        )
         tutorial = rendered.split("<!-- Interactive Tutorial / Onboarding -->", 1)[1].split(
             "<!-- Keyboard", 1
         )[0]

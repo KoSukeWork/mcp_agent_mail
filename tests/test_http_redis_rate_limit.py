@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from mcp_agent_mail import config as _config
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.http import build_http_app
+from mcp_agent_mail.http import _close_shared_rate_limit_redis, build_http_app
 
 
 def _rpc(method: str, params: dict) -> dict:
@@ -31,13 +31,19 @@ async def test_rate_limit_redis_backend_path(isolated_env, monkeypatch):
 
     # Provide a fake redis.asyncio module
     class FakeRedis:
+        def __init__(self) -> None:
+            self.closed = False
+
         @classmethod
-        def from_url(cls, url: str):
+        def from_url(cls, url: str, **_kwargs):
             return cls()
 
         async def eval(self, script: str, numkeys: int, *args):
             # Always allow (return 1)
             return 1
+
+        async def aclose(self) -> None:
+            self.closed = True
 
     fake_pkg = cast(Any, ModuleType("redis.asyncio"))
     fake_pkg.Redis = FakeRedis
@@ -53,3 +59,8 @@ async def test_rate_limit_redis_backend_path(isolated_env, monkeypatch):
         assert r1.status_code in (200, 429)
         r2 = await client.post(settings.http.path, json=_rpc("resources/read", {"uri": "resource://tooling/projects"}))
         assert r2.status_code in (200, 429)
+
+    shared_redis = app.state.rate_limit_redis_client
+    assert shared_redis.closed is False
+    await _close_shared_rate_limit_redis(app, timeout_seconds=1.0)
+    assert shared_redis.closed is True

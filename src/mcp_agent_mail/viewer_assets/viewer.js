@@ -797,6 +797,47 @@ function viewerController() {
     _mobileMediaListener: null,
     _onMobileScroll: null,
 
+    manifestProjectCountLabel() {
+      const included = this.manifest && this.manifest.project_scope
+        ? this.manifest.project_scope.included
+        : [];
+      return `${Array.isArray(included) ? included.length : 0} project(s)`;
+    },
+
+    manifestGeneratedAt() {
+      return this.manifest ? this.manifest.generated_at : '';
+    },
+
+    manifestSchemaVersion() {
+      return this.manifest ? this.manifest.schema_version : '';
+    },
+
+    clearSearch() {
+      this.searchQuery = '';
+      this.filterMessages();
+    },
+
+    setSort(sortBy) {
+      this.sortBy = sortBy;
+      this.filterMessages();
+      this.sortOpen = false;
+    },
+
+    updateSelectAllState(element) {
+      element.indeterminate = this.selectedMessages.length > 0
+        && this.selectedMessages.length < this.filteredMessages.length;
+    },
+
+    closeThreadDetail() {
+      this.viewMode = 'split';
+      this.selectedThread = null;
+    },
+
+    switchToListView() {
+      this.viewMode = 'list';
+      this.showMobileMessage = false;
+    },
+
     async init() {
       console.info('[Alpine] Initializing viewer controller');
       applyViewerLocale(this.locale);

@@ -337,6 +337,7 @@ Please investigate the following:
          @click.self="showConfirmModal = false"
          @keydown.escape.window="showConfirmModal = false">
       <div x-show="showConfirmModal"
+           data-confirm-dialog
            x-transition:enter="transition ease-out duration-200"
            x-transition:enter-start="opacity-0"
            x-transition:enter-end="opacity-100"
@@ -346,7 +347,7 @@ Please investigate the following:
            x-transition:enter="transition ease-out duration-300"
            x-transition:enter-start="opacity-0 scale-95"
            x-transition:enter-end="opacity-100 scale-100"
-           x-init="$nextTick(() => $el.querySelector('button[type=button]:last-of-type').focus())"
+           x-init="$nextTick(focusConfirmDialog)"
            @keydown.tab.prevent="trapModalFocus($event)"
            class="relative w-full max-w-md bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden">
 
@@ -392,7 +393,7 @@ Please investigate the following:
   </template>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function overseerComposer() {
   return {
     agents: [{% for agent in agents %}{{ agent.name | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
@@ -569,6 +570,12 @@ function overseerComposer() {
           }
         }
       }
+    },
+
+    focusConfirmDialog() {
+      const dialog = document.querySelector('[data-confirm-dialog]');
+      const button = dialog?.querySelector('button[type=button]:last-of-type');
+      button?.focus();
     },
 
     trapModalFocus(event) {

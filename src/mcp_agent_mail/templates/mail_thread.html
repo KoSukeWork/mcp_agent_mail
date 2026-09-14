@@ -181,7 +181,7 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
   // Initialize icons after Alpine renders
   document.addEventListener('alpine:initialized', () => {
     if (typeof lucide !== 'undefined') {

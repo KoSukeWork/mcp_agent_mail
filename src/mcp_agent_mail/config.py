@@ -16,7 +16,10 @@ from decouple import (
 
 _DOTENV_PATH: Final[Path] = Path(".env")
 MAIL_UI_USERNAME_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
+MAIL_UI_PASSWORD_MIN_LENGTH: Final[int] = 12
+MAIL_UI_PASSWORD_MAX_LENGTH: Final[int] = 1024
 MAIL_UI_SESSION_SECRET_MIN_LENGTH: Final[int] = 32
+RATE_LIMIT_REDIS_PREFIX_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 
 def _build_decouple_config() -> DecoupleConfig:
@@ -55,6 +58,9 @@ class HttpSettings:
     rate_limit_tools_per_minute: int
     rate_limit_resources_per_minute: int
     rate_limit_redis_url: str
+    rate_limit_redis_prefix: str
+    rate_limit_redis_connect_timeout_seconds: int
+    rate_limit_redis_socket_timeout_seconds: int
     # Optional bursts to control spikiness
     rate_limit_tools_burst: int
     rate_limit_resources_burst: int
@@ -83,6 +89,8 @@ class HttpSettings:
     mail_ui_session_secret: str | None
     mail_ui_session_ttl_seconds: int
     mail_ui_login_rate_limit_per_minute: int
+    mail_ui_login_global_rate_limit_per_hour: int
+    mail_ui_login_max_tracked_clients: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -403,6 +411,29 @@ def _mail_ui_username(value: str) -> str:
     )
 
 
+def _mail_ui_password(value: str | None) -> str | None:
+    if value is None or value == "":
+        return None
+    if not value.strip():
+        raise ConfigError("MAIL_UI_PASSWORD must not contain only whitespace.")
+    if not (MAIL_UI_PASSWORD_MIN_LENGTH <= len(value) <= MAIL_UI_PASSWORD_MAX_LENGTH):
+        raise ConfigError(
+            "MAIL_UI_PASSWORD must be between "
+            f"{MAIL_UI_PASSWORD_MIN_LENGTH} and {MAIL_UI_PASSWORD_MAX_LENGTH} characters."
+        )
+    return value
+
+
+def _rate_limit_redis_prefix(value: str) -> str:
+    normalized = value.strip() or "mcp-agent-mail"
+    if RATE_LIMIT_REDIS_PREFIX_RE.fullmatch(normalized):
+        return normalized
+    raise ConfigError(
+        "HTTP_RATE_LIMIT_REDIS_PREFIX must be 1-64 characters in [A-Za-z0-9._:-]; "
+        f"got {value!r}."
+    )
+
+
 def _mail_ui_session_secret(value: str | None, *, password: str | None) -> str | None:
     """Require a high-entropy cookie key whenever a UI password is configured."""
 
@@ -460,6 +491,19 @@ def _build_settings() -> Settings:
             return default
         return _int_optional(raw, key=name)
 
+    def _bounded_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
+        value = _i(name, default=default)
+        if minimum <= value <= maximum:
+            return value
+        raise ConfigError(f"{name} must be between {minimum} and {maximum}; got {value!r}.")
+
+    def _nonnegative_int(name: str, *, default: int, maximum: int) -> int:
+        return _bounded_int(name, default=default, minimum=0, maximum=maximum)
+
+    mail_ui_password = _mail_ui_password(
+        decouple_config("MAIL_UI_PASSWORD", default="") or None
+    )
+
     http_settings = HttpSettings(
         host=decouple_config("HTTP_HOST", default="127.0.0.1"),
         port=_i("HTTP_PORT", default=8765),
@@ -476,6 +520,21 @@ def _build_settings() -> Settings:
         rate_limit_tools_per_minute=_i("HTTP_RATE_LIMIT_TOOLS_PER_MINUTE", default=60),
         rate_limit_resources_per_minute=_i("HTTP_RATE_LIMIT_RESOURCES_PER_MINUTE", default=120),
         rate_limit_redis_url=decouple_config("HTTP_RATE_LIMIT_REDIS_URL", default=""),
+        rate_limit_redis_prefix=_rate_limit_redis_prefix(
+            decouple_config("HTTP_RATE_LIMIT_REDIS_PREFIX", default="mcp-agent-mail")
+        ),
+        rate_limit_redis_connect_timeout_seconds=_bounded_int(
+            "HTTP_RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS",
+            default=2,
+            minimum=1,
+            maximum=30,
+        ),
+        rate_limit_redis_socket_timeout_seconds=_bounded_int(
+            "HTTP_RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS",
+            default=2,
+            minimum=1,
+            maximum=30,
+        ),
         rate_limit_tools_burst=_i("HTTP_RATE_LIMIT_TOOLS_BURST", default=0),
         rate_limit_resources_burst=_i("HTTP_RATE_LIMIT_RESOURCES_BURST", default=0),
         request_log_enabled=_b("HTTP_REQUEST_LOG_ENABLED", default=False),
@@ -501,20 +560,39 @@ def _build_settings() -> Settings:
         mail_ui_username=_mail_ui_username(
             decouple_config("MAIL_UI_USERNAME", default="operator").strip() or "operator"
         ),
-        mail_ui_password=decouple_config("MAIL_UI_PASSWORD", default="") or None,
+        mail_ui_password=mail_ui_password,
         mail_ui_session_secret=_mail_ui_session_secret(
             decouple_config("MAIL_UI_SESSION_SECRET", default="") or None,
-            password=decouple_config("MAIL_UI_PASSWORD", default="") or None,
+            password=mail_ui_password,
         ),
-        mail_ui_session_ttl_seconds=min(
-            max(_i("MAIL_UI_SESSION_TTL_SECONDS", default=43200), 300),
-            2_592_000,
+        mail_ui_session_ttl_seconds=_bounded_int(
+            "MAIL_UI_SESSION_TTL_SECONDS",
+            default=43_200,
+            minimum=300,
+            maximum=2_592_000,
         ),
-        mail_ui_login_rate_limit_per_minute=max(
-            _i("MAIL_UI_LOGIN_RATE_LIMIT_PER_MINUTE", default=10),
-            0,
+        mail_ui_login_rate_limit_per_minute=_nonnegative_int(
+            "MAIL_UI_LOGIN_RATE_LIMIT_PER_MINUTE",
+            default=10,
+            maximum=100_000,
+        ),
+        mail_ui_login_global_rate_limit_per_hour=_nonnegative_int(
+            "MAIL_UI_LOGIN_GLOBAL_RATE_LIMIT_PER_HOUR",
+            default=200,
+            maximum=1_000_000,
+        ),
+        mail_ui_login_max_tracked_clients=_bounded_int(
+            "MAIL_UI_LOGIN_MAX_TRACKED_CLIENTS",
+            default=10_000,
+            minimum=100,
+            maximum=1_000_000,
         ),
     )
+
+    if http_settings.rate_limit_backend == "redis" and not http_settings.rate_limit_redis_url.strip():
+        raise ConfigError(
+            "HTTP_RATE_LIMIT_REDIS_URL is required when HTTP_RATE_LIMIT_BACKEND=redis."
+        )
 
     database_settings = DatabaseSettings(
         url=decouple_config("DATABASE_URL", default="sqlite+aiosqlite:///./storage.sqlite3"),

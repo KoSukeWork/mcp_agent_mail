@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import urllib.request
@@ -992,6 +993,50 @@ def test_share_export_chunking_and_viewer_data(monkeypatch, tmp_path: Path) -> N
 def test_verify_viewer_vendor_assets():
     # Should not raise when bundled vendor assets match recorded checksums.
     share._verify_viewer_vendor_assets()
+
+
+def test_viewer_executes_only_package_owned_assets() -> None:
+    viewer_root = Path(share.__file__).with_name("viewer_assets")
+    html = (viewer_root / "index.html").read_text(encoding="utf-8")
+
+    assert 'src="https://' not in html
+    assert 'src="http://' not in html
+    assert 'href="https://' not in html
+    assert 'href="http://' not in html
+    assert "cdn.tailwindcss.com" not in html
+    assert "tailwind.config" not in html
+    csp_match = re.search(r'http-equiv="Content-Security-Policy"\s+content="([^"]+)"', html)
+    assert csp_match is not None
+    csp = csp_match.group(1)
+    script_src = csp.split("script-src ", maxsplit=1)[1].split(";", maxsplit=1)[0]
+    assert "'unsafe-inline'" not in script_src
+    assert "'unsafe-eval'" not in script_src
+    for script in re.findall(r"<script>([\s\S]*?)</script>", html):
+        canonical_script = script.replace("\r\n", "\n")
+        digest = base64.b64encode(hashlib.sha256(canonical_script.encode()).digest()).decode()
+        assert f"'sha256-{digest}'" in script_src
+    inline_style = re.search(r"<style>([\s\S]*?)</style>", html)
+    assert inline_style is not None
+    canonical_style = inline_style.group(1).replace("\r\n", "\n")
+    style_digest = base64.b64encode(hashlib.sha256(canonical_style.encode()).digest()).decode()
+    assert f"'sha256-{style_digest}'" in csp
+    for asset in ("viewer-tailwind.css", "alpine.min.js", "lucide.min.js"):
+        assert f'./vendor/{asset}' in html
+        assert (viewer_root / "vendor" / asset).is_file()
+    sri_assets = re.findall(
+        r'<(?:script|link)[^>]+(?:src|href)="(\./vendor/[^"]+)"[^>]+integrity="([^"]+)"',
+        html,
+    )
+    assert len(sri_assets) >= 5
+    for relative_path, integrity in sri_assets:
+        asset = viewer_root / relative_path.removeprefix("./")
+        actual_digest = base64.b64encode(hashlib.sha256(asset.read_bytes()).digest()).decode()
+        accepted_digests = {
+            token.removeprefix("sha256-")
+            for token in integrity.split()
+            if token.startswith("sha256-")
+        }
+        assert actual_digest in accepted_digests
 
 
 def test_verify_viewer_vendor_assets_normalizes_windows_line_endings(tmp_path: Path) -> None:

@@ -47,6 +47,7 @@ def test_config_valid_explicit_values_parse(monkeypatch):
     monkeypatch.setenv("LLM_TEMPERATURE", "0.7")
     monkeypatch.setenv("AGENT_NAME_ENFORCEMENT_MODE", "strict")
     monkeypatch.setenv("HTTP_RATE_LIMIT_BACKEND", "redis")
+    monkeypatch.setenv("HTTP_RATE_LIMIT_REDIS_URL", "redis://localhost:6379/0")
     clear_settings_cache()
     s = get_settings()
     assert s.http.port == 9999

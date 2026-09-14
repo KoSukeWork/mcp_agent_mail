@@ -21,11 +21,16 @@ from types import ModuleType
 from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from mcp_agent_mail import config as _config
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.http import build_http_app
+from mcp_agent_mail.http import (
+    RateLimitBackendUnavailable,
+    SecurityAndRateLimitMiddleware,
+    build_http_app,
+)
 
 
 def _rpc(method: str, params: dict) -> dict:
@@ -379,13 +384,16 @@ class TestRedisBackend:
 
         class FakeRedis:
             @classmethod
-            def from_url(cls, url: str):
+            def from_url(cls, url: str, **_kwargs):
                 return cls()
 
             async def eval(self, script: str, numkeys: int, *args):
                 lua_calls.append((script, numkeys, args))
                 # Allow first 2, deny after
                 return 1 if len(lua_calls) <= 2 else 0
+
+            async def aclose(self) -> None:
+                return None
 
         fake_pkg = cast(Any, ModuleType("redis.asyncio"))
         fake_pkg.Redis = FakeRedis
@@ -420,11 +428,12 @@ class TestRedisBackend:
             for script, numkeys, args in lua_calls:
                 assert "tokens" in script  # Token bucket logic
                 assert numkeys == 1
-                assert "rl:" in args[0]  # Rate limit key prefix
+                assert "{mcp-agent-mail:http-rate-limit}:" in args[0]
+                assert "health_check" not in args[0]
 
     @pytest.mark.asyncio
-    async def test_redis_fallback_on_error(self, isolated_env, monkeypatch):
-        """Redis errors should gracefully allow requests (fail open)."""
+    async def test_redis_error_fails_closed(self, isolated_env, monkeypatch):
+        """Redis errors must not silently multiply limits across workers."""
         monkeypatch.setenv("HTTP_RATE_LIMIT_ENABLED", "true")
         monkeypatch.setenv("HTTP_RATE_LIMIT_BACKEND", "redis")
         monkeypatch.setenv("HTTP_RATE_LIMIT_REDIS_URL", "redis://localhost:6379/0")
@@ -435,11 +444,14 @@ class TestRedisBackend:
 
         class FakeRedis:
             @classmethod
-            def from_url(cls, url: str):
+            def from_url(cls, url: str, **_kwargs):
                 return cls()
 
             async def eval(self, script: str, numkeys: int, *args):
                 raise ConnectionError("Redis connection failed")
+
+            async def aclose(self) -> None:
+                return None
 
         fake_pkg = cast(Any, ModuleType("redis.asyncio"))
         fake_pkg.Redis = FakeRedis
@@ -450,12 +462,34 @@ class TestRedisBackend:
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # Should fail open and allow the request
+            # Shared security controls fail closed rather than degrading per-process.
             r = await client.post(
                 settings.http.path,
                 json=_rpc("tools/call", {"name": "health_check", "arguments": {}}),
             )
-            assert r.status_code == 200
+            assert r.status_code == 503
+            assert r.headers["retry-after"] == "5"
+
+    @pytest.mark.asyncio
+    async def test_hung_redis_command_is_bounded(self, isolated_env, monkeypatch):
+        """A non-returning Redis command must not leave an HTTP worker stuck."""
+
+        class HungRedis:
+            async def eval(self, *_args):
+                await asyncio.Event().wait()
+
+        monkeypatch.setenv("HTTP_RBAC_ENABLED", "false")
+        _config.clear_settings_cache()
+        settings = _config.get_settings()
+        middleware = SecurityAndRateLimitMiddleware(
+            FastAPI(),
+            settings,
+            redis_client=HungRedis(),
+        )
+        middleware._redis_operation_timeout_seconds = 0.05
+
+        with pytest.raises(RateLimitBackendUnavailable):
+            await middleware._consume_bucket("tools:health:client", 60, 60)
 
 
 # ============================================================================

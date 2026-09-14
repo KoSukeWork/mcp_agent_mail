@@ -4,13 +4,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Tailwind's runtime build and Alpine evaluate expressions at runtime, so
-       'unsafe-eval'/'unsafe-inline' are still required for script-src/style-src.
-       Everything else is narrowed to the exact origins we load from: connect-src
-       is 'self' (the mailbox DB and sql.js wasm are all served locally), and the
-       unused cdnjs/jsdelivr/unpkg style origins are dropped. -->
+  <!-- All executable and style assets are package-owned. Exact hashes authorize
+       inline bootstraps/base CSS; style attributes stay enabled only for Alpine x-show. -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self';" />
+    content="default-src 'self'; script-src 'self' 'sha256-FR6JVaZU9V4Z3ejjCMiCW1K9zgjqjg60De5w4wXy1RI=' 'sha256-vHp7UmrPHKmKOASIAlCqwxvITnon34OpjXhyMlbiKEU=' 'sha256-58dRiB3MVu1vAZN8aWNVqAQYA4XJyIKD82PKtY71T4o=' 'sha256-KQunAkJUq5s/v6sZlLbIQPEGLjmlPc0pmitimuxP9do='; style-src 'self' 'sha256-/0Il3gOchB8ELZ9ubn1/8h+w3oRSwEPDdn0j76Z9fjI='; style-src-attr 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self';" />
   <title data-i18n="Agent Mail Viewer">Agent Mail Viewer</title>
 
   <!-- Preload critical assets to reduce time-to-interactive -->
@@ -21,12 +18,6 @@
   <!-- Favicon to prevent 404s in preview -->
   <link rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%236366F1'/%3E%3Cpath d='M8 20h48v24H8z' fill='white'/%3E%3Cpath d='M8 20l24 18 24-18' stroke='%236366F1' stroke-width='4' fill='none'/%3E%3C/svg%3E" />
-
-  <!-- Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet">
 
   <script>
     (function () {
@@ -44,49 +35,9 @@
     })();
   </script>
 
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
-          },
-          colors: {
-            primary: {
-              50: '#eef2ff',
-              100: '#e0e7ff',
-              200: '#c7d2fe',
-              300: '#a5b4fc',
-              400: '#818cf8',
-              500: '#6366f1',
-              600: '#4f46e5',
-              700: '#4338ca',
-              800: '#3730a3',
-              900: '#312e81',
-              950: '#1e1b4b',
-            },
-          },
-          animation: {
-            'fade-in': 'fadeIn 0.2s ease-in-out',
-            'slide-in': 'slideIn 0.3s ease-out',
-          },
-          keyframes: {
-            fadeIn: {
-              '0%': { opacity: '0' },
-              '100%': { opacity: '1' },
-            },
-            slideIn: {
-              '0%': { transform: 'translateX(-10px)', opacity: '0' },
-              '100%': { transform: 'translateX(0)', opacity: '1' },
-            },
-          },
-        },
-      },
-    }
-  </script>
+  <!-- Precompiled, package-owned Tailwind CSS -->
+  <link rel="stylesheet" href="./vendor/viewer-tailwind.css"
+    integrity="sha256-Gjs0hfbNRbLMbdLTruK+VsHWhnp0xaR1dU7dqL7sJ58= sha256-v/YixcgYN6UD6JvljuilOtVCrL/+CKtDYN5tO6dvi6o=" crossorigin="anonymous">
 
   <!-- Hold Alpine startup until our controllers register -->
   <script>
@@ -112,15 +63,16 @@
 
   <!-- Alpine.js will be loaded after our controllers at the end of body -->
 
-  <!-- Lucide Icons (version-pinned to avoid @latest drift) -->
-  <script src="https://unpkg.com/lucide@0.474.0/dist/umd/lucide.min.js"></script>
+  <!-- Package-owned Lucide Icons -->
+  <script src="./vendor/lucide.min.js" integrity="sha256-iZP9tOVOg5qCPpcJWx7i1NpnjbbY/FsOpJaqmAZ9e9Q= sha256-L3RuI5APaUr20kKKH6eGyObDDKX8npPimfp922GfPoU="
+    crossorigin="anonymous"></script>
 
   <!-- Marked.js for markdown rendering -->
-  <script src="./vendor/marked.min.js" integrity="sha256-iiOIwxmH8YPwUHaWKofAvi6NTUI9pec6g05elbtCB+8="
+  <script src="./vendor/marked.min.js" integrity="sha256-iiOIwxmH8YPwUHaWKofAvi6NTUI9pec6g05elbtCB+8= sha256-ZGLbgEk15DhhTFuhiESfOOA+CO5yBdca+SojwVPpS+Y="
     crossorigin="anonymous"></script>
 
   <!-- DOMPurify for HTML sanitization -->
-  <script src="./vendor/dompurify.min.js" integrity="sha256-0kaYYq3qitkkVZpP/6uKTJwfTpqFNM6OHDbsaYzw9Uw="
+  <script src="./vendor/dompurify.min.js" integrity="sha256-0kaYYq3qitkkVZpP/6uKTJwfTpqFNM6OHDbsaYzw9Uw= sha256-TdT39eHtkIbErbsVJLjGh5KCPxMRZOPKTQvQ6RAkQC0="
     crossorigin="anonymous"></script>
 
   <style>
@@ -326,13 +278,13 @@
   </style>
 </head>
 
-<body class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white min-h-screen" x-data="window.viewerController()" x-cloak>
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white min-h-screen" x-data="viewerController" x-cloak>
 
   <!-- Fullscreen Backdrop -->
   <div x-show="isFullscreen" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0"
     x-transition:enter-end="opacity-100" x-transition:leave="transition ease-in duration-200"
     x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" @click="isFullscreen = false"
-    class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-40" aria-hidden="true" style="display: none;">
+    class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-40" aria-hidden="true" x-cloak>
   </div>
 
   <!-- Main Container -->
@@ -347,7 +299,7 @@
           <span data-i18n="Agent Mail">Agent Mail</span>
         </h1>
         <span x-show="manifest" class="text-sm text-slate-500 dark:text-slate-400"
-          x-text="((manifest?.project_scope?.included || []).length) + ' project(s)'"></span>
+          x-text="manifestProjectCountLabel()"></span>
       </div>
 
         <div class="flex items-center gap-3">
@@ -394,7 +346,7 @@
       x-transition:leave="transition ease-in duration-150" x-transition:leave-start="opacity-100 translate-y-0"
       x-transition:leave-end="opacity-0 -translate-y-2"
       class="bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-4 sm:px-6 py-4"
-      style="display: none;">
+      x-cloak>
       <div class="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
         <div>
           <h3 class="font-semibold text-slate-900 dark:text-white mb-2">Database</h3>
@@ -431,11 +383,11 @@
           <dl class="space-y-1 text-slate-600 dark:text-slate-400">
             <div class="flex justify-between">
               <dt>Generated:</dt>
-              <dd x-text="manifest?.generated_at"></dd>
+              <dd x-text="manifestGeneratedAt()"></dd>
             </div>
             <div class="flex justify-between">
               <dt>Schema:</dt>
-              <dd x-text="manifest?.schema_version"></dd>
+              <dd x-text="manifestSchemaVersion()"></dd>
             </div>
           </dl>
         </div>
@@ -453,13 +405,13 @@
           <i data-lucide="search"
             class="w-5 h-5 text-slate-400 group-focus-within:text-primary-500 transition-colors"></i>
         </div>
-        <input x-model="searchQuery" @input="onSearchInput()" @keydown.escape="searchQuery = ''; filterMessages()"
+        <input x-model="searchQuery" @input="onSearchInput()" @keydown.escape="clearSearch()"
           type="search" placeholder="Search all messages across all projects and agents..."
           class="w-full pl-12 pr-24 py-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 focus:border-primary-500 dark:focus:border-primary-500 rounded-xl text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 transition-all duration-200 focus:ring-2 focus:ring-primary-500/20"
           autocomplete="off" id="unified-search" aria-label="Search all messages" />
         <div class="absolute inset-y-0 right-0 pr-3 flex items-center gap-2">
           <template x-if="searchQuery">
-            <button @click="searchQuery = ''; filterMessages()"
+            <button @click="clearSearch()"
               class="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded transition-colors"
               aria-label="Clear search">
               <i data-lucide="x" class="w-4 h-4 text-slate-500"></i>
@@ -491,7 +443,7 @@
           class="p-2 rounded transition-colors" aria-label="Split view (Gmail style)">
           <i data-lucide="columns-2" class="w-4 h-4 text-slate-700 dark:text-slate-300"></i>
         </button>
-        <button @click="viewMode = 'list'; showMobileMessage = false"
+        <button @click="switchToListView()"
           :class="viewMode === 'list' ? 'bg-white dark:bg-slate-800 shadow-sm' : 'hover:bg-slate-200 dark:hover:bg-slate-800'"
           class="p-2 rounded transition-colors" aria-label="List view only">
           <i data-lucide="list" class="w-4 h-4 text-slate-700 dark:text-slate-300"></i>
@@ -624,7 +576,7 @@
       :class="[
         isFullscreen ? 'fixed inset-0 top-40 z-50' : 'min-h-[600px]',
         isMobile ? 'pb-[6.5rem]' : ''
-      ]" style="display: none;">
+      ]" x-cloak>
 
       <!-- Left: Message List -->
       <aside
@@ -636,14 +588,8 @@
           class="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between bg-slate-50 dark:bg-slate-900">
           <div class="flex items-center gap-3">
             <input type="checkbox" @change="toggleSelectAll()"
-              :checked="selectedMessages.length > 0 && selectedMessages.length === filteredMessages.length" x-init="
-                       const updateIndeterminate = () => {
-                         $el.indeterminate = selectedMessages.length > 0 && selectedMessages.length < filteredMessages.length;
-                       };
-                       $watch('selectedMessages', updateIndeterminate);
-                       $watch('filteredMessages', updateIndeterminate);
-                       updateIndeterminate();
-                     "
+              :checked="selectedMessages.length > 0 && selectedMessages.length === filteredMessages.length"
+              x-effect="updateSelectAllState($el)"
               class="w-4 h-4 text-primary-600 bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 rounded focus:ring-2 focus:ring-primary-500 transition-all duration-200 cursor-pointer"
               aria-label="Select all messages">
             <template x-if="selectedMessages.length > 0">
@@ -676,27 +622,27 @@
               x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 scale-95"
               x-transition:enter-end="opacity-100 scale-100"
               class="absolute right-0 mt-1 w-40 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 py-1 z-20"
-              style="display: none;">
-              <button @click="sortBy = 'newest'; filterMessages(); sortOpen = false"
-                :class="sortBy === 'newest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300" : 'text-slate-700 dark:text-slate-300'"
+              x-cloak>
+              <button @click="setSort('newest')"
+                :class="sortBy === 'newest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                 class="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
                 <i data-lucide="arrow-down" class="w-4 h-4"></i>
                 Newest First
               </button>
-              <button @click="sortBy = 'oldest'; filterMessages(); sortOpen = false"
-                :class="sortBy === 'oldest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300" : 'text-slate-700 dark:text-slate-300'"
+              <button @click="setSort('oldest')"
+                :class="sortBy === 'oldest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                 class="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
                 <i data-lucide="arrow-up" class="w-4 h-4"></i>
                 Oldest First
               </button>
-              <button @click="sortBy = 'sender'; filterMessages(); sortOpen = false"
-                :class="sortBy === 'sender' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300" : 'text-slate-700 dark:text-slate-300'"
+              <button @click="setSort('sender')"
+                :class="sortBy === 'sender' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                 class="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
                 <i data-lucide="user" class="w-4 h-4"></i>
                 By Sender
               </button>
-              <button @click="sortBy = 'longest'; filterMessages(); sortOpen = false"
-                :class="sortBy === 'longest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300" : 'text-slate-700 dark:text-slate-300'"
+              <button @click="setSort('longest')"
+                :class="sortBy === 'longest' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-slate-700 dark:text-slate-300'"
                 class="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
                 <i data-lucide="file-text" class="w-4 h-4"></i>
                 Longest First
@@ -707,7 +653,7 @@
 
         <!-- Message List (Windowed Rendering) -->
         <div class="flex-1 overflow-hidden">
-          <div id="virtual-message-list" class="virtual-scroll" style="max-height: calc(100vh - 320px);">
+          <div id="virtual-message-list" class="virtual-scroll max-h-[calc(100vh-320px)]">
             <div id="virtual-message-content" class="virtual-scroll-content">
               <div class="virtual-no-data py-20 text-center text-slate-500 dark:text-slate-400">Loading...</div>
             </div>
@@ -857,7 +803,7 @@
 
     <!-- Thread View -->
     <div x-show="!isLoading && viewMode === 'threads'" class="max-w-5xl mx-auto space-y-6 pb-12"
-      :class="isMobile ? 'pb-[7rem]' : ''" style="display: none;">
+      :class="isMobile ? 'pb-[7rem]' : ''" x-cloak>
 
       <div class="grid gap-6 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
         <aside class="space-y-4">
@@ -987,7 +933,7 @@
 
               <!-- Actions -->
               <div class="flex items-center gap-2">
-                <button @click="viewMode = 'split'; selectedThread = null"
+                <button @click="closeThreadDetail()"
                   class="px-3 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-all duration-200 flex items-center gap-2 text-sm font-medium">
                   <i data-lucide="arrow-left" class="w-4 h-4"></i>
                   Back to Inbox
@@ -1120,8 +1066,7 @@
     x-transition:leave-end="opacity-0 translate-y-4">
     <div class="mx-auto max-w-xl">
       <div
-        class="bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-700 shadow-xl rounded-2xl backdrop-blur-md px-3 py-2 flex items-center justify-between gap-2"
-        style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem); touch-action: none;">
+        class="bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-700 shadow-xl rounded-2xl backdrop-blur-md px-3 py-2 pb-[calc(env(safe-area-inset-bottom,0px)+0.5rem)] touch-none flex items-center justify-between gap-2">
         <button @click="showFilters = !showFilters"
           class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-xl bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-700 transition-colors">
           <i data-lucide="sliders-horizontal" class="w-4 h-4"></i>
@@ -1134,7 +1079,7 @@
             <i data-lucide="columns-2" class="w-3.5 h-3.5"></i>
             Split
           </button>
-          <button @click="viewMode = 'list'; showMobileMessage = false"
+          <button @click="switchToListView()"
             :class="viewMode === 'list' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'"
             class="inline-flex items-center justify-center gap-1 px-2.5 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 transition-colors">
             <i data-lucide="list" class="w-3.5 h-3.5"></i>
@@ -1240,7 +1185,8 @@
   <script type="module" src="./preview-reload.js"></script>
   <script src="./viewer.js"></script>
   <!-- Load Alpine AFTER viewer.js so controllers exist before Alpine scans -->
-  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
+  <script src="./vendor/alpine.min.js" integrity="sha256-NKmkAvuMxJBPQR8XMhpD+zxVuCXT9X6RA8DhDLt+2L4= sha256-5krWfXZV5XyraBKrlSJbRX8vr+jiol3YRlA1D7uVkLg="
+    crossorigin="anonymous" defer></script>
 
   <script>
     // Initialize Lucide icons

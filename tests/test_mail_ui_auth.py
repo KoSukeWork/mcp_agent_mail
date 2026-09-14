@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
-from mcp_agent_mail import config as _config
+from mcp_agent_mail import config as _config, http as http_module, ui_auth as ui_auth_module
 from mcp_agent_mail.app import build_mcp_server
 from mcp_agent_mail.config import ConfigError
+from mcp_agent_mail.db import ensure_schema, get_session
 from mcp_agent_mail.http import build_http_app
+from mcp_agent_mail.models import MailUISessionRecord
 from mcp_agent_mail.ui_auth import (
+    MAIL_UI_SESSION_COOKIE,
     LoginAttemptLimiter,
     parse_session_cookie,
     sanitize_mail_next_path,
@@ -70,6 +76,14 @@ def test_templates_avoid_removed_tailwind_v4_utilities() -> None:
     assert violations == []
 
 
+def test_templates_nonce_every_inline_script() -> None:
+    templates_root = Path(__file__).parents[1] / "src/mcp_agent_mail/templates"
+    for template in templates_root.glob("*.html"):
+        contents = template.read_text(encoding="utf-8")
+        inline_scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>", contents)
+        assert all('nonce="{{ csp_nonce }}"' in tag for tag in inline_scripts), template
+
+
 def test_sanitize_mail_next_path_rejects_open_redirects() -> None:
     assert sanitize_mail_next_path(None) == "/mail"
     assert sanitize_mail_next_path("/mail/projects") == "/mail/projects"
@@ -104,7 +118,13 @@ def test_session_cookie_roundtrip_and_tamper(isolated_env, monkeypatch) -> None:
     secret = session_signing_key(settings)
     assert secret is not None
     token = sign_session_payload(
-        {"v": 1, "u": "operator", "csrf": "c" * 32, "exp": 2_000_000_000},
+        {
+            "v": 2,
+            "sid": "s" * 43,
+            "u": "operator",
+            "csrf": "c" * 32,
+            "exp": 2_000_000_000,
+        },
         secret=secret,
     )
     session = parse_session_cookie(token, secret=secret, now=1_900_000_000)
@@ -113,7 +133,7 @@ def test_session_cookie_roundtrip_and_tamper(isolated_env, monkeypatch) -> None:
     tampered = ("a" + token[1:]) if token[0] != "a" else ("b" + token[1:])
     assert parse_session_cookie(tampered, secret=secret, now=1_900_000_000) is None
     expired = sign_session_payload(
-        {"v": 1, "u": "operator", "csrf": "c" * 32, "exp": 10},
+        {"v": 2, "sid": "s" * 43, "u": "operator", "csrf": "c" * 32, "exp": 10},
         secret=secret,
     )
     assert parse_session_cookie(expired, secret=secret, now=20) is None
@@ -126,7 +146,13 @@ def test_password_rotation_revokes_existing_session(isolated_env, monkeypatch) -
     old_key = session_signing_key(_config.get_settings())
     assert old_key is not None
     token = sign_session_payload(
-        {"v": 1, "u": "operator", "csrf": "c" * 32, "exp": 2_000_000_000},
+        {
+            "v": 2,
+            "sid": "s" * 43,
+            "u": "operator",
+            "csrf": "c" * 32,
+            "exp": 2_000_000_000,
+        },
         secret=old_key,
     )
 
@@ -146,7 +172,13 @@ def test_username_rotation_revokes_existing_session(isolated_env, monkeypatch) -
     old_key = session_signing_key(_config.get_settings())
     assert old_key is not None
     token = sign_session_payload(
-        {"v": 1, "u": "old-user", "csrf": "c" * 32, "exp": 2_000_000_000},
+        {
+            "v": 2,
+            "sid": "s" * 43,
+            "u": "old-user",
+            "csrf": "c" * 32,
+            "exp": 2_000_000_000,
+        },
         secret=old_key,
     )
 
@@ -189,6 +221,86 @@ def test_username_rejects_spaces(isolated_env, monkeypatch) -> None:
         _config.get_settings()
 
 
+@pytest.mark.parametrize("password", ["short", " " * 12])
+def test_configured_mail_ui_password_must_be_strong(
+    isolated_env,
+    monkeypatch,
+    password: str,
+) -> None:
+    monkeypatch.setenv("MAIL_UI_PASSWORD", password)
+    monkeypatch.setenv("MAIL_UI_SESSION_SECRET", _SESSION_SECRET)
+    _config.clear_settings_cache()
+    with pytest.raises(ConfigError, match="MAIL_UI_PASSWORD"):
+        _config.get_settings()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("MAIL_UI_LOGIN_RATE_LIMIT_PER_MINUTE", "-1"),
+        ("MAIL_UI_LOGIN_GLOBAL_RATE_LIMIT_PER_HOUR", "-1"),
+        ("MAIL_UI_SESSION_TTL_SECONDS", "299"),
+        ("MAIL_UI_SESSION_TTL_SECONDS", "2592001"),
+        ("HTTP_RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS", "0"),
+        ("HTTP_RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS", "31"),
+        ("MAIL_UI_LOGIN_MAX_TRACKED_CLIENTS", "99"),
+    ],
+)
+def test_mail_ui_security_limits_reject_out_of_range_values(
+    isolated_env,
+    monkeypatch,
+    name: str,
+    value: str,
+) -> None:
+    monkeypatch.setenv(name, value)
+    _config.clear_settings_cache()
+    with pytest.raises(ConfigError, match=name):
+        _config.get_settings()
+
+
+def test_redis_rate_limit_prefix_rejects_unsafe_characters(
+    isolated_env,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HTTP_RATE_LIMIT_REDIS_PREFIX", "mail ui/production")
+    _config.clear_settings_cache()
+    with pytest.raises(ConfigError, match="HTTP_RATE_LIMIT_REDIS_PREFIX"):
+        _config.get_settings()
+
+
+def test_redis_rate_limit_backend_requires_url(isolated_env, monkeypatch) -> None:
+    monkeypatch.setenv("HTTP_RATE_LIMIT_BACKEND", "redis")
+    monkeypatch.setenv("HTTP_RATE_LIMIT_REDIS_URL", "")
+    _config.clear_settings_cache()
+    with pytest.raises(ConfigError, match="HTTP_RATE_LIMIT_REDIS_URL"):
+        _config.get_settings()
+
+
+def test_session_ttl_rotation_revokes_existing_session(isolated_env, monkeypatch) -> None:
+    monkeypatch.setenv("MAIL_UI_PASSWORD", "ui-secret-ok")
+    monkeypatch.setenv("MAIL_UI_SESSION_SECRET", _SESSION_SECRET)
+    _config.clear_settings_cache()
+    old_key = session_signing_key(_config.get_settings())
+    assert old_key is not None
+    token = sign_session_payload(
+        {
+            "v": 2,
+            "sid": "s" * 43,
+            "u": "operator",
+            "csrf": "c" * 32,
+            "exp": 2_000_000_000,
+        },
+        secret=old_key,
+    )
+
+    monkeypatch.setenv("MAIL_UI_SESSION_TTL_SECONDS", "300")
+    _config.clear_settings_cache()
+    new_key = session_signing_key(_config.get_settings())
+    assert new_key is not None
+    assert new_key != old_key
+    assert parse_session_cookie(token, secret=new_key, now=1_900_000_000) is None
+
+
 def _csrf_from_html(html: str) -> str:
     match = _CSRF_INPUT_RE.search(html)
     assert match is not None
@@ -202,6 +314,7 @@ async def _build_client(monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncClient, _
     monkeypatch.setenv("HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED", "false")
     _config.clear_settings_cache()
     settings = _config.get_settings()
+    await ensure_schema(settings)
     app = build_http_app(settings, build_mcp_server())
     client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
     return client, settings
@@ -237,6 +350,12 @@ async def test_mail_login_is_reachable_without_bearer(isolated_env, monkeypatch)
         assert response.headers["x-frame-options"] == "DENY"
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["referrer-policy"] == "no-referrer"
+        login_csp = response.headers["content-security-policy"]
+        assert "unsafe-inline" not in login_csp
+        assert "unsafe-eval" not in login_csp
+        login_nonce = re.search(r"style-src 'nonce-([^']+)'", login_csp)
+        assert login_nonce is not None
+        assert f'nonce="{login_nonce.group(1)}"' in response.text
         blocked = await client.get("/mail", follow_redirects=False)
         assert blocked.status_code == 303
         assert str(blocked.headers.get("location", "")).startswith("/mail/login")
@@ -265,6 +384,14 @@ async def test_mail_login_success_and_logout(isolated_env, monkeypatch) -> None:
         assert "no-store" in (home.headers.get("cache-control") or "")
         assert "connect-src 'self'" in home.headers["content-security-policy"]
         assert "frame-ancestors 'none'" in home.headers["content-security-policy"]
+        assert "unsafe-inline" not in home.headers["content-security-policy"].split("style-src", 1)[0]
+        assert "unsafe-eval" not in home.headers["content-security-policy"]
+        script_nonce = re.search(
+            r"script-src 'nonce-([^']+)'",
+            home.headers["content-security-policy"],
+        )
+        assert script_nonce is not None
+        assert f'nonce="{script_nonce.group(1)}"' in home.text
         assert home.headers["x-frame-options"] == "DENY"
         assert 'href="/mail/assets/mail-tailwind.css"' in home.text
         assert "@tailwindcss/browser" not in home.text
@@ -274,6 +401,11 @@ async def test_mail_login_success_and_logout(isolated_env, monkeypatch) -> None:
         assert stylesheet.headers["cross-origin-resource-policy"] == "same-origin"
         assert ".shrink-0" in stylesheet.text
         assert ".bg-primary-500" in stylesheet.text
+        for asset_name in ("alpine-collapse.min.js", "alpine-csp.min.js"):
+            script_asset = await client.get(f"/mail/assets/{asset_name}")
+            assert script_asset.status_code == 200
+            assert script_asset.headers["content-type"].startswith("text/javascript")
+        assert "alpine-csp.min.js" in home.text
         assert "Sign out" in home.text
         mcp = await client.post(settings.http.path, json=_RPC_HEALTH)
         assert mcp.status_code == 401
@@ -285,6 +417,14 @@ async def test_mail_login_success_and_logout(isolated_env, monkeypatch) -> None:
         assert mcp_ok.status_code != 401
         meta = _CSRF_META_RE.search(home.text)
         assert meta is not None
+        captured_session = client.cookies.get(MAIL_UI_SESSION_COOKIE)
+        assert captured_session
+        async with get_session() as db_session:
+            records = (await db_session.scalars(select(MailUISessionRecord))).all()
+        assert len(records) == 1
+        assert len(records[0].session_id_hash) == 64
+        assert records[0].session_id_hash not in captured_session
+        assert records[0].revoked_at is None
         logout = await client.post(
             "/mail/logout",
             data={"csrf_token": meta.group(1)},
@@ -292,8 +432,81 @@ async def test_mail_login_success_and_logout(isolated_env, monkeypatch) -> None:
             follow_redirects=False,
         )
         assert logout.status_code == 303
+        async with get_session() as db_session:
+            revoked = await db_session.get(
+                MailUISessionRecord,
+                records[0].session_id_hash,
+            )
+        assert revoked is not None
+        assert revoked.revoked_at is not None
         again = await client.get("/mail", follow_redirects=False)
         assert again.status_code == 303
+        client.cookies.set(
+            MAIL_UI_SESSION_COOKIE,
+            captured_session,
+            path="/mail",
+        )
+        replay = await client.get("/mail", follow_redirects=False)
+        assert replay.status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_mail_ui_session_database_failures_fail_closed(isolated_env, monkeypatch) -> None:
+    client, _settings = await _build_client(monkeypatch)
+    async with client:
+        await _sign_in(client)
+
+        async def fail_validation(_session):
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(ui_auth_module, "mail_ui_session_is_active", fail_validation)
+        response = await client.get("/mail", follow_redirects=False)
+        assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_mail_ui_session_creation_failure_returns_503(isolated_env, monkeypatch) -> None:
+    async def fail_issue(*_args, **_kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(http_module, "issue_mail_ui_session", fail_issue)
+    client, _settings = await _build_client(monkeypatch)
+    async with client:
+        page = await client.get("/mail/login")
+        response = await client.post(
+            "/mail/login",
+            data={
+                "username": "operator",
+                "password": "ui-secret-ok",
+                "csrf_token": _csrf_from_html(page.text),
+            },
+            headers={"Origin": "http://test"},
+        )
+        assert response.status_code == 503
+        assert client.cookies.get(MAIL_UI_SESSION_COOKIE) is None
+
+
+@pytest.mark.asyncio
+async def test_mail_ui_logout_revocation_failure_returns_503(isolated_env, monkeypatch) -> None:
+    client, _settings = await _build_client(monkeypatch)
+    async with client:
+        await _sign_in(client)
+        home = await client.get("/mail")
+        csrf = _CSRF_META_RE.search(home.text)
+        assert csrf is not None
+
+        async def fail_revoke(_session):
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(http_module, "revoke_mail_ui_session", fail_revoke)
+        response = await client.post(
+            "/mail/logout",
+            data={"csrf_token": csrf.group(1)},
+            headers={"Origin": "http://test"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 503
+        assert client.cookies.get(MAIL_UI_SESSION_COOKIE)
 
 
 @pytest.mark.asyncio
@@ -362,29 +575,43 @@ async def test_login_attempt_limiter_bounds_and_expires_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_login_attempt_limiter_applies_global_hourly_budget() -> None:
+    now = [0.0]
+    limiter = LoginAttemptLimiter(
+        per_minute=0,
+        global_per_hour=2,
+        monotonic=lambda: now[0],
+    )
+
+    assert await limiter.allow("192.0.2.1") is True
+    assert await limiter.allow("192.0.2.2") is True
+    assert await limiter.allow("192.0.2.3") is False
+    now[0] = 3601.0
+    assert await limiter.allow("192.0.2.3") is True
+
+
+@pytest.mark.asyncio
 async def test_login_attempt_limiter_uses_shared_redis_backend(monkeypatch) -> None:
     class FakeRedis:
         def __init__(self) -> None:
             self.eval_calls: list[tuple[object, ...]] = []
-            self.deleted: list[str] = []
             self.closed = False
 
         async def eval(self, *args):
             self.eval_calls.append(args)
             return 1
 
-        async def delete(self, key: str) -> None:
-            self.deleted.append(key)
-
         async def aclose(self) -> None:
             self.closed = True
 
     fake_redis = FakeRedis()
+    redis_options: dict[str, object] = {}
 
     class FakeRedisFactory:
         @staticmethod
-        def from_url(url: str) -> FakeRedis:
+        def from_url(url: str, **kwargs: object) -> FakeRedis:
             assert url == "redis://rate-limit.example/0"
+            redis_options.update(kwargs)
             return fake_redis
 
     monkeypatch.setattr(
@@ -394,6 +621,7 @@ async def test_login_attempt_limiter_uses_shared_redis_backend(monkeypatch) -> N
     limiter = LoginAttemptLimiter(
         per_minute=10,
         redis_url="redis://rate-limit.example/0",
+        redis_prefix="mail-prod",
     )
 
     assert await limiter.allow("203.0.113.7") is True
@@ -401,10 +629,42 @@ async def test_login_attempt_limiter_uses_shared_redis_backend(monkeypatch) -> N
     await limiter.record_success("203.0.113.7")
     await limiter.close()
 
-    assert len(fake_redis.eval_calls) == 2
-    assert len(fake_redis.deleted) == 1
-    assert "203.0.113.7" not in fake_redis.deleted[0]
+    assert len(fake_redis.eval_calls) == 3
+    first_call = fake_redis.eval_calls[0]
+    assert first_call[1] == 3
+    assert all("{mail-prod:mail-ui-login}" in str(key) for key in first_call[2:5])
+    assert all("203.0.113.7" not in str(key) for key in first_call[2:5])
+    assert redis_options["socket_connect_timeout"] == 2.0
+    assert redis_options["socket_timeout"] == 2.0
+    assert redis_options["health_check_interval"] == 30
+    assert redis_options["retry_on_timeout"] is False
     assert fake_redis.closed is True
+
+
+@pytest.mark.asyncio
+async def test_hung_redis_login_limiter_returns_503_promptly(isolated_env, monkeypatch) -> None:
+    class HungRedis:
+        async def eval(self, *_args):
+            await asyncio.Event().wait()
+
+    client, _settings = await _build_client(monkeypatch)
+    limiter = cast(Any, client._transport).app.state.mail_ui_login_limiter
+    limiter._redis = HungRedis()
+    limiter._redis_operation_timeout_seconds = 0.05
+
+    async with client:
+        page = await client.get("/mail/login")
+        response = await client.post(
+            "/mail/login",
+            data={
+                "username": "operator",
+                "password": "wrong-password",
+                "csrf_token": _csrf_from_html(page.text),
+            },
+            headers={"Origin": "http://test"},
+        )
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "5"
 
 
 @pytest.mark.asyncio

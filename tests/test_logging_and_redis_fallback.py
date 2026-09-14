@@ -45,5 +45,5 @@ async def test_rate_limit_redis_import_failure_fails_closed(isolated_env, monkey
     real_import = importlib.import_module
     monkeypatch.setattr(importlib, "import_module", fake_import)
 
-    with pytest.raises(RuntimeError, match="Redis login rate limiting backend is unavailable"):
+    with pytest.raises(RuntimeError, match="Redis rate limiting backend is unavailable"):
         build_http_app(settings, build_mcp_server())

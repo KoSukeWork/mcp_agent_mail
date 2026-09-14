@@ -85,9 +85,9 @@
         </div>
       </div>
       <!-- Archive / Unarchive Button -->
-      <div class="flex items-center gap-2" x-data="{ showArchiveConfirm: false }">
+      <div class="flex items-center gap-2" x-data="projectArchiveControls({{ project.id }})">
         {% if project.archived_at %}
-        <button @click="fetch('/mail/api/unarchive-project', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id:{{ project.id }}})}).then(r=>r.json()).then(d=>{if(d.success) location.reload()})"
+        <button @click="updateArchive('/mail/api/unarchive-project')"
                 class="inline-flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg shadow-sm hover:shadow-md transition-all duration-200">
           <i data-lucide="archive-restore" class="w-4 h-4"></i>
           {{ _("Restore Project") }}
@@ -131,7 +131,7 @@
                       class="px-4 py-2 text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg text-sm font-medium transition-colors">
                 {{ _("Cancel") }}
               </button>
-              <button @click="fetch('/mail/api/archive-project', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id:{{ project.id }}})}).then(r=>r.json()).then(d=>{if(d.success) location.reload()})"
+              <button @click="updateArchive('/mail/api/archive-project')"
                       class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-semibold transition-colors">
                 {{ _("Archive Project") }}
               </button>
@@ -522,7 +522,22 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
+  function projectArchiveControls(projectId) {
+    return {
+      showArchiveConfirm: false,
+      async updateArchive(path) {
+        const response = await fetch(path, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({project_id: projectId})
+        });
+        const result = await response.json();
+        if (result.success) window.location.reload();
+      }
+    };
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     // Update keyboard shortcut display based on platform (with modern API fallback)
     const shortcutKey = document.querySelector('.shortcut-key');

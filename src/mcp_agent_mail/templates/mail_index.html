@@ -404,7 +404,7 @@
       </div>
 
       <!-- No results state -->
-      <div x-show="searchQuery && !Array.from(document.querySelectorAll('[data-project-card]')).some(card => card.style.display !== 'none')"
+      <div x-show="searchQuery && !hasMatchingItems()"
            x-transition:enter="transition ease-out duration-200"
            x-transition:enter-start="opacity-0 transform scale-95"
            x-transition:enter-end="opacity-100 transform scale-100"
@@ -434,7 +434,7 @@
         <div x-show="showArchived" x-collapse>
           <div :class="view === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6' : 'space-y-4'">
             {% for p in archived_projects %}
-            <div @click="if (!$event.target.closest('a,button,input,select')) window.location.href = {{ ('/mail/' ~ p.slug) | tojson | forceescape }}"
+            <div @click="openProject($event, {{ ('/mail/' ~ p.slug) | tojson | forceescape }})"
                class="group relative bg-slate-50 dark:bg-slate-800/50 rounded-2xl p-8 shadow-soft border-2 border-dashed border-slate-300 dark:border-slate-600 hover:border-amber-400 dark:hover:border-amber-600 transition-all duration-300 overflow-hidden opacity-75 hover:opacity-100"
                data-project-id="{{ p.id }}"
                data-project-search="{{ (p.human_key ~ ' ' ~ p.slug)|lower }}">
@@ -552,7 +552,7 @@
 </div>
 
 {{ lifecycle.script() }}
-<script>
+<script nonce="{{ csp_nonce }}">
   (() => {
     // Apply declarative animation attributes to avoid inline style with template expressions
     requestAnimationFrame(() => {

@@ -40,5 +40,32 @@
         "sha256": "228634991975e7bdb75de66f97fb7ccc3c0c430b99f199192e799c0a06418113"
       }
     }
+  },
+  "viewer_tailwind": {
+    "version": "4.3.3",
+    "source": "generated from web/viewer-tailwind.css with @tailwindcss/cli",
+    "files": {
+      "viewer-tailwind.css": {
+        "sha256": "1a3b3485f6cd45b2cc6dd2d3aee2be56c1d6867a74c5a475754edda8beec279f"
+      }
+    }
+  },
+  "alpine_csp": {
+    "version": "3.17.2",
+    "source": "https://registry.npmjs.org/@alpinejs/csp/-/csp-3.17.2.tgz",
+    "files": {
+      "alpine.min.js": {
+        "sha256": "34a9a402fb8cc4904f411f17321a43fb3c55b825d3f57e9103c0e10cbb7ed8be"
+      }
+    }
+  },
+  "lucide": {
+    "version": "0.474.0",
+    "source": "https://registry.npmjs.org/lucide/-/lucide-0.474.0.tgz",
+    "files": {
+      "lucide.min.js": {
+        "sha256": "8993fdb4e54e839a823e97095b1ee2d4da678db6d8fc5b0ea496aa98067d7bd4"
+      }
+    }
   }
 }

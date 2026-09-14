@@ -267,16 +267,16 @@
       <p class="text-slate-600 dark:text-slate-400 mb-6 max-w-md mx-auto">
         {{ _("No messages match your search query. Try different keywords or use the query help above.") }}
       </p>
-      <button @click="document.getElementById('q').value = ''; document.getElementById('q').focus()"
-              class="px-6 py-3 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg shadow-medium hover:shadow-large transition-all duration-300 flex items-center gap-2 mx-auto btn-ripple">
+      <a href="/mail/search"
+         class="px-6 py-3 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg shadow-medium hover:shadow-large transition-all duration-300 flex items-center gap-2 mx-auto btn-ripple">
         <i data-lucide="refresh-cw" class="w-4 h-4"></i>
         {{ _("Clear Search") }}
-      </button>
+      </a>
     </div>
   {% endif %}
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
   document.addEventListener('DOMContentLoaded', () => {
     const form = document.querySelector('form');
     const input = document.getElementById('q');

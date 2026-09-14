@@ -399,10 +399,12 @@ Auth notes:
 - `HTTP_BEARER_TOKEN` and JWT protect MCP HTTP routes. They do not gate `/mail`.
 - The human mail UI uses an independent cookie session. Set `MAIL_UI_PASSWORD` and open `/mail/login`.
 - Passwordless mail access accepts only direct loopback connections using a literal loopback Host; configure a password behind any proxy or non-loopback hostname.
-- `MAIL_UI_SESSION_SECRET` must be blank without a UI password. Changing either the password or secret invalidates existing UI sessions.
-- Authenticated UI CDN resources are exact-version pinned with SHA-384 SRI, and mail pages restrict resource and network origins with CSP.
-- Tailwind utility CSS is precompiled from `web/mail-tailwind.css` into the package-owned `src/mcp_agent_mail/static/mail-tailwind.css`; rebuild it with `npm ci --ignore-scripts` and `npm run build:mail-css` after template class changes.
-- The built-in launcher is single-process. Multi-worker or multi-replica deployments must set `HTTP_RATE_LIMIT_BACKEND=redis` and `HTTP_RATE_LIMIT_REDIS_URL`; this shares MCP and Mail UI login limits and fails closed for login while Redis is unavailable.
+- `MAIL_UI_SESSION_SECRET` must be blank without a UI password. Changing the username, password, secret, or session TTL invalidates existing UI sessions; logout also revokes the current session in the database so a copied cookie cannot be replayed.
+- The archive Viewer executes only package-owned scripts/styles and uses system fonts. The authenticated Mail UI self-hosts Tailwind and Alpine; its remaining exact-version CDN assets carry SHA-384 SRI and are constrained by CSP.
+- Tailwind utility CSS is precompiled for both the authenticated Mail UI and standalone archive Viewer. Run `npm ci --ignore-scripts` and `npm run build:web-assets` after template or Viewer class changes; generated CSS and the Viewer's Alpine/Lucide bundles are package-owned and CI-verified.
+- Authenticated Mail UI scripts use per-response CSP nonces and the package-owned Alpine CSP build; `script-src` does not permit `unsafe-inline` or `unsafe-eval`.
+- The built-in launcher is single-process. Multi-worker or multi-replica deployments must set `HTTP_RATE_LIMIT_BACKEND=redis` and `HTTP_RATE_LIMIT_REDIS_URL`; this shares MCP and Mail UI login limits and both fail closed while Redis is unavailable.
+- Set a unique `HTTP_RATE_LIMIT_REDIS_PREFIX` per deployment and the same value on all of its replicas. The limiter bounds tracked login clients and applies a deployment-wide operator budget, but operators must still configure and monitor a suitable Redis `maxmemory` policy for the shared service.
 - For local MCP clients without a header, set `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED=true`.
 - Health endpoints are always open at `/health/*`.
 
@@ -1202,11 +1204,10 @@ Message bodies are rendered using a defense-in-depth pipeline:
 
 This prevents malicious content in message bodies from executing JavaScript or exfiltrating data.
 
-**CSP configuration notes:**
-- `script-src`: Allows self, CDNs (Tailwind, Alpine.js), and `'unsafe-eval'` (required for SQL.js WebAssembly)
-- `connect-src`: Allows `*` (all origins) to support preview mode polling and flexible deployment scenarios
-- `style-src`: Allows self, inline styles (for Tailwind), and font CDNs
-- Trusted Types removed for browser compatibility (Firefox, Safari don't support it yet)
+**Standalone Viewer CSP notes:**
+- Executable code, Tailwind CSS, Alpine, Lucide, fonts, and database assets are all package-owned; the Viewer does not load remote scripts or styles.
+- `connect-src` is restricted to `'self'` for its local mailbox database and preview reload endpoint.
+- The static Viewer still allows inline bootstrap code and Alpine expression evaluation; the authenticated `/mail` application instead uses nonce-authorized scripts and the Alpine CSP build.
 
 **Cryptographic signing (Ed25519)**
 
@@ -1995,6 +1996,9 @@ Common variables you may set:
 | `HTTP_RATE_LIMIT_RESOURCES_PER_MINUTE` | `120` | Per-minute for resources/read |
 | `HTTP_RATE_LIMIT_RESOURCES_BURST` | `0` | Optional burst for resources (0=auto=rpm) |
 | `HTTP_RATE_LIMIT_REDIS_URL` |  | Redis URL for multi-worker limits |
+| `HTTP_RATE_LIMIT_REDIS_PREFIX` | `mcp-agent-mail` | Stable deployment namespace for shared Redis limiter keys; replicas of one deployment must match |
+| `HTTP_RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS` | `2` | Redis connection timeout, constrained to 1-30 seconds |
+| `HTTP_RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS` | `2` | Redis command timeout, constrained to 1-30 seconds |
 | `HTTP_REQUEST_LOG_ENABLED` | `false` | Print request logs (Rich + JSON) |
 | `LOG_JSON_ENABLED` | `false` | Output structlog JSON logs |
 | `MCP_AGENT_MAIL_OUTPUT_FORMAT` |  | Default output format for tools/resources (`json` or `toon`) |
@@ -2015,10 +2019,12 @@ Common variables you may set:
 | `HTTP_BEARER_TOKEN` |  | Static bearer token for MCP HTTP (independent of the mail UI cookie login) |
 | `HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED` | `true` | Allow localhost MCP requests without a bearer token (dev convenience) |
 | `MAIL_UI_USERNAME` | `operator` | Human username for the `/mail` cookie session (`[A-Za-z0-9._@-]{1,64}`) |
-| `MAIL_UI_PASSWORD` |  | Human password for `/mail/login`. Required for non-localhost mail UI access |
+| `MAIL_UI_PASSWORD` |  | Human password for `/mail/login` (12-1024 characters). Required for non-localhost mail UI access |
 | `MAIL_UI_SESSION_SECRET` |  | Required high-entropy cookie signing secret (at least 32 chars) when `MAIL_UI_PASSWORD` is set |
-| `MAIL_UI_SESSION_TTL_SECONDS` | `43200` | Mail UI session lifetime in seconds (clamped 300-2592000) |
+| `MAIL_UI_SESSION_TTL_SECONDS` | `43200` | Mail UI session lifetime in seconds; explicit values outside 300-2592000 are rejected |
 | `MAIL_UI_LOGIN_RATE_LIMIT_PER_MINUTE` | `10` | Independent `/mail/login` attempt limit per client IP; `0` disables |
+| `MAIL_UI_LOGIN_GLOBAL_RATE_LIMIT_PER_HOUR` | `200` | Shared deployment-wide `/mail/login` attempt budget; `0` disables |
+| `MAIL_UI_LOGIN_MAX_TRACKED_CLIENTS` | `10000` | Maximum login client identities tracked by memory or Redis backends |
 | `HTTP_OTEL_ENABLED` | `false` | Enable OpenTelemetry instrumentation |
 | `OTEL_SERVICE_NAME` | `mcp-agent-mail` | Service name for telemetry |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` |  | OTLP exporter endpoint URL |

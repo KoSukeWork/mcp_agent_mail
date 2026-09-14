@@ -166,7 +166,7 @@
         <div id="message-body">{{ message.body_html | safe }}</div>
       {% else %}
         <div id="message-body" class="markdown-content"></div>
-        <script>
+        <script nonce="{{ csp_nonce }}">
           // Render markdown on client side for better security and features
           document.addEventListener('DOMContentLoaded', () => {
             const markdownContent = {{ message.body_md | tojson }};

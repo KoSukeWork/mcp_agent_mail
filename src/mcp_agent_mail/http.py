@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import hashlib
 import hmac
 import importlib
 import json
@@ -68,13 +69,16 @@ from .ui_auth import (
     MailUIAuthMiddleware,
     clear_login_csrf_cookie,
     clear_mail_ui_session_cookie,
+    create_rate_limit_redis_client,
     credentials_configured,
     current_mail_ui_csrf,
+    current_mail_ui_session,
     current_mail_ui_username,
     is_mail_ui_path,
     issue_mail_ui_session,
     new_login_csrf_token,
     origin_is_same_site,
+    revoke_mail_ui_session,
     sanitize_mail_next_path,
     set_login_csrf_cookie,
     verify_login_csrf,
@@ -570,6 +574,10 @@ def _localhost_bypass_allowed(request: Request, *, allow_localhost: bool) -> boo
     )
 
 
+class RateLimitBackendUnavailable(RuntimeError):
+    """Raised when a configured shared limiter cannot make an atomic decision."""
+
+
 class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
     """JWT auth (optional), RBAC, and token-bucket rate limiting.
 
@@ -578,7 +586,12 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
     - Applies per-endpoint token-bucket limits (tools vs resources) with in-memory or Redis backend.
     """
 
-    def __init__(self, app: FastAPI, settings: Settings):
+    def __init__(
+        self,
+        app: FastAPI,
+        settings: Settings,
+        redis_client: Any | None = None,
+    ):
         super().__init__(app)
         self.settings = settings
         self._jwt_enabled = bool(getattr(settings.http, "jwt_enabled", False))
@@ -593,17 +606,18 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         self._monotonic = monotonic
         self._buckets: dict[str, tuple[float, float]] = {}
         self._last_cleanup = monotonic()
+        redis_prefix = getattr(settings.http, "rate_limit_redis_prefix", "mcp-agent-mail")
+        self._redis_namespace = f"{{{redis_prefix}:http-rate-limit}}"
+        self._redis_operation_timeout_seconds = max(
+            0.1,
+            float(settings.http.rate_limit_redis_socket_timeout_seconds),
+        )
         # Redis client (optional)
-        self._redis = None
-        if getattr(settings.http, "rate_limit_backend", "memory") == "redis" and getattr(
-            settings.http, "rate_limit_redis_url", ""
-        ):
-            try:
-                redis_asyncio = importlib.import_module("redis.asyncio")
-                Redis = redis_asyncio.Redis
-                self._redis = Redis.from_url(settings.http.rate_limit_redis_url)
-            except Exception:
-                self._redis = None
+        self._redis = redis_client
+        if self._redis is None and getattr(settings.http, "rate_limit_backend", "memory") == "redis":
+            raise RuntimeError(
+                "The Redis rate limit backend requires the application-owned shared client"
+            )
 
     def _cleanup_buckets(self, now: float) -> None:
         """Remove stale buckets to prevent memory leaks."""
@@ -725,15 +739,17 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         # Redis backend
         if self._redis is not None:
             try:
+                redis_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
                 lua = (
                     "local key = KEYS[1]\n"
-                    "local now = tonumber(ARGV[1])\n"
-                    "local rate = tonumber(ARGV[2])\n"
-                    "local burst = tonumber(ARGV[3])\n"
+                    "local redis_time = redis.call('TIME')\n"
+                    "local now = tonumber(redis_time[1]) + tonumber(redis_time[2]) / 1000000\n"
+                    "local rate = tonumber(ARGV[1])\n"
+                    "local burst = tonumber(ARGV[2])\n"
                     "local state = redis.call('HMGET', key, 'tokens', 'ts')\n"
                     "local tokens = tonumber(state[1]) or burst\n"
                     "local ts = tonumber(state[2]) or now\n"
-                    "local delta = now - ts\n"
+                    "local delta = math.max(0, now - ts)\n"
                     "tokens = math.min(burst, tokens + delta * rate)\n"
                     "local allowed = 0\n"
                     "if tokens >= 1 then\n"
@@ -744,11 +760,17 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
                     "redis.call('EXPIRE', key, math.ceil(burst / math.max(rate, 0.001)))\n"
                     "return allowed\n"
                 )
-                allowed = await self._redis.eval(lua, 1, f"rl:{key}", now, rate_per_sec, burst)
+                async with asyncio.timeout(self._redis_operation_timeout_seconds):
+                    allowed = await self._redis.eval(
+                        lua,
+                        1,
+                        f"{self._redis_namespace}:{redis_key}",
+                        rate_per_sec,
+                        burst,
+                    )
                 return bool(int(allowed or 0) == 1)
-            except Exception:
-                # Fallback to memory on Redis failure
-                pass
+            except Exception as exc:
+                raise RateLimitBackendUnavailable from exc
 
         # In-memory token bucket
         tokens, ts = self._buckets.get(key, (float(burst), now))
@@ -873,7 +895,15 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
                         identity = f"sub:{sub}"
             endpoint = tool_name or "*"
             key = f"{kind}:{endpoint}:{identity}"
-            allowed = await self._consume_bucket(key, rpm, burst)
+            try:
+                allowed = await self._consume_bucket(key, rpm, burst)
+            except RateLimitBackendUnavailable:
+                logging.error("Shared HTTP rate limiter unavailable", exc_info=True)
+                return JSONResponse(
+                    {"detail": "Rate limiting is temporarily unavailable"},
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    headers={"Retry-After": "5"},
+                )
             if not allowed:
                 return JSONResponse({"detail": "Rate limit exceeded"}, status_code=status.HTTP_429_TOO_MANY_REQUESTS)
 
@@ -884,6 +914,17 @@ async def readiness_check() -> None:
     await ensure_schema()
     async with get_session() as session:
         await session.execute(text("SELECT 1"))
+
+
+async def _close_shared_rate_limit_redis(app: FastAPI, *, timeout_seconds: float) -> None:
+    redis_client = getattr(app.state, "rate_limit_redis_client", None)
+    if redis_client is None:
+        return
+    try:
+        async with asyncio.timeout(max(0.1, float(timeout_seconds))):
+            await redis_client.aclose()
+    except Exception:  # pragma: no cover - defensive shutdown logging
+        logging.error("Failed to close shared HTTP rate limiter", exc_info=True)
 
     # Fail readiness if FD usage from lockfile leaks is critically high.
     # This gives orchestrators a signal to restart the process before it
@@ -1314,6 +1355,10 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         await login_limiter.close()
                     except Exception:  # pragma: no cover - defensive shutdown logging
                         logging.error("Failed to close Mail UI login limiter", exc_info=True)
+                await _close_shared_rate_limit_redis(
+                    app,
+                    timeout_seconds=settings.http.rate_limit_redis_socket_timeout_seconds,
+                )
                 await _shutdown()
 
     # Now construct FastAPI with the composed lifespan so ASGI transports run it.
@@ -1477,6 +1522,17 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         app_any = cast(Any, fastapi_app)
         app_any.add_middleware(RequestLoggingMiddleware)
 
+    shared_rate_limit_redis = None
+    if settings.http.rate_limit_backend == "redis":
+        if not settings.http.rate_limit_redis_url:
+            raise RuntimeError("HTTP_RATE_LIMIT_REDIS_URL is required for the Redis rate limit backend")
+        shared_rate_limit_redis = create_rate_limit_redis_client(
+            settings.http.rate_limit_redis_url,
+            connect_timeout_seconds=settings.http.rate_limit_redis_connect_timeout_seconds,
+            socket_timeout_seconds=settings.http.rate_limit_redis_socket_timeout_seconds,
+        )
+        fastapi_app.state.rate_limit_redis_client = shared_rate_limit_redis
+
     # Unified JWT/RBAC and robust rate limiter middleware
     if (
         settings.http.rate_limit_enabled
@@ -1484,7 +1540,11 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         or getattr(settings.http, "rbac_enabled", True)
     ):
         app_any = cast(Any, fastapi_app)
-        app_any.add_middleware(SecurityAndRateLimitMiddleware, settings=settings)
+        app_any.add_middleware(
+            SecurityAndRateLimitMiddleware,
+            settings=settings,
+            redis_client=shared_rate_limit_redis,
+        )
     # Bearer auth for non-localhost only; allow localhost unauth optionally for seamless local dev
     if settings.http.bearer_token:
         from typing import Any as _Any, cast as _cast  # local type-only import
@@ -1497,14 +1557,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
         )
 
     app_mail_ui = cast(Any, fastapi_app)
-    login_rate_limit_redis_url = (
-        settings.http.rate_limit_redis_url
-        if settings.http.rate_limit_backend == "redis"
-        else None
-    )
     app_mail_ui.state.mail_ui_login_limiter = LoginAttemptLimiter(
         per_minute=int(settings.http.mail_ui_login_rate_limit_per_minute),
-        redis_url=login_rate_limit_redis_url,
+        global_per_hour=int(settings.http.mail_ui_login_global_rate_limit_per_hour),
+        max_entries=int(settings.http.mail_ui_login_max_tracked_clients),
+        redis_client=shared_rate_limit_redis,
+        redis_prefix=settings.http.rate_limit_redis_prefix,
     )
     app_mail_ui.add_middleware(MailUIAuthMiddleware, settings=settings)
 
@@ -2047,23 +2105,39 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             css_sanitizer=_css_sanitizer,
         )
 
-        async def _render(name: str, **ctx: Any) -> HTMLResponse:
+        async def _render(
+            name: str,
+            *,
+            csp_profile: str = "mail",
+            **ctx: Any,
+        ) -> HTMLResponse:
             tpl = env.get_template(name)
+            nonce = secrets.token_urlsafe(24)
+            ctx["csp_nonce"] = nonce
             ctx["legacy_archive_notice"] = name.startswith("archive_")
             html = await tpl.render_async(**ctx)
+            if csp_profile == "login":
+                content_security_policy = (
+                    "default-src 'none'; "
+                    f"style-src 'nonce-{nonce}'; "
+                    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+                )
+            else:
+                content_security_policy = (
+                    "default-src 'none'; "
+                    f"script-src 'nonce-{nonce}' 'self' "
+                    "https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; "
+                    f"style-src 'self' 'nonce-{nonce}' "
+                    "https://unpkg.com https://cdnjs.cloudflare.com; "
+                    "style-src-attr 'unsafe-inline'; "
+                    "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
+                    "media-src 'self'; object-src 'none'; frame-src 'none'; "
+                    "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+                )
             return HTMLResponse(
                 html,
                 headers={
-                    "Content-Security-Policy": (
-                        "default-src 'none'; "
-                        "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
-                        "https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; "
-                        "style-src 'self' 'unsafe-inline' "
-                        "https://unpkg.com https://cdnjs.cloudflare.com; "
-                        "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
-                        "media-src 'self'; object-src 'none'; frame-src 'none'; "
-                        "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-                    ),
+                    "Content-Security-Policy": content_security_policy,
                     "X-Frame-Options": "DENY",
                     "X-Content-Type-Options": "nosniff",
                     "Referrer-Policy": "same-origin",
@@ -2335,13 +2409,22 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                 )
             return {name: values[0] for name, values in parsed.items()}
 
-        mail_tailwind_css_path = Path(__file__).with_name("static") / "mail-tailwind.css"
+        mail_assets_root = Path(__file__).with_name("static")
+        mail_assets = {
+            "mail-tailwind.css": ("mail-tailwind.css", "text/css; charset=utf-8"),
+            "alpine-collapse.min.js": ("alpine-collapse.min.js", "text/javascript; charset=utf-8"),
+            "alpine-csp.min.js": ("alpine-csp.min.js", "text/javascript; charset=utf-8"),
+        }
 
-        @fastapi_app.get("/mail/assets/mail-tailwind.css", include_in_schema=False)
-        async def mail_tailwind_css_asset() -> FileResponse:
+        @fastapi_app.get("/mail/assets/{asset_name}", include_in_schema=False)
+        async def mail_ui_asset(asset_name: str) -> FileResponse:
+            asset = mail_assets.get(asset_name)
+            if asset is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+            filename, media_type = asset
             return FileResponse(
-                mail_tailwind_css_path,
-                media_type="text/css; charset=utf-8",
+                mail_assets_root / filename,
+                media_type=media_type,
                 headers={
                     "Cross-Origin-Resource-Policy": "same-origin",
                     "X-Content-Type-Options": "nosniff",
@@ -2366,6 +2449,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             csrf_token = new_login_csrf_token()
             html = await _render(
                 "mail_login.html",
+                csp_profile="login",
                 csrf_token=csrf_token,
                 next_path=sanitize_mail_next_path(next_path),
                 error_message=error_message,
@@ -2375,10 +2459,6 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             set_login_csrf_cookie(html, csrf_token, request=request)
             html.headers["Cache-Control"] = "no-store, max-age=0"
             html.headers["Pragma"] = "no-cache"
-            html.headers["Content-Security-Policy"] = (
-                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
-                "base-uri 'none'; frame-ancestors 'none'"
-            )
             html.headers["X-Frame-Options"] = "DENY"
             html.headers["X-Content-Type-Options"] = "nosniff"
             html.headers["Referrer-Policy"] = "no-referrer"
@@ -2446,18 +2526,37 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                         headers={"Retry-After": "5"},
                     )
             redirect = RedirectResponse(next_path, status_code=status.HTTP_303_SEE_OTHER)
-            issue_mail_ui_session(
-                redirect,
-                request=request,
-                settings=settings,
-                username=(settings.http.mail_ui_username or "operator"),
-            )
+            try:
+                await issue_mail_ui_session(
+                    redirect,
+                    request=request,
+                    settings=settings,
+                    username=(settings.http.mail_ui_username or "operator"),
+                )
+            except Exception:
+                logging.error("Failed to persist Mail UI session", exc_info=True)
+                return JSONResponse(
+                    {"detail": "Mail UI session creation is temporarily unavailable"},
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    headers={"Retry-After": "5"},
+                )
             clear_login_csrf_cookie(redirect)
             redirect.headers["Cache-Control"] = "no-store"
             return redirect
 
         @fastapi_app.post("/mail/logout")
         async def mail_logout() -> Response:
+            active_session = current_mail_ui_session()
+            if active_session is not None:
+                try:
+                    await revoke_mail_ui_session(active_session)
+                except Exception:
+                    logging.error("Failed to revoke Mail UI session", exc_info=True)
+                    return JSONResponse(
+                        {"detail": "Mail UI logout is temporarily unavailable"},
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        headers={"Retry-After": "5"},
+                    )
             redirect = RedirectResponse("/mail/login", status_code=status.HTTP_303_SEE_OTHER)
             clear_mail_ui_session_cookie(redirect)
             clear_login_csrf_cookie(redirect)

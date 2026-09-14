@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import CheckConstraint, Column, Index, UniqueConstraint, text
+from sqlalchemy import BigInteger, CheckConstraint, Column, Index, UniqueConstraint, text
 from sqlalchemy.types import JSON
 from sqlmodel import Field, SQLModel
 
@@ -249,6 +249,25 @@ class McpClientPrincipal(SQLModel, table=True):
     last_authenticated_at: datetime = Field(default_factory=_utcnow_naive)
     revoked_at: Optional[datetime] = Field(default=None)
     revocation_reason: Optional[str] = Field(default=None, max_length=2048)
+
+
+class MailUISessionRecord(SQLModel, table=True):
+    """Server-side revocation record for an issued human Mail UI session."""
+
+    __tablename__ = "mail_ui_sessions"
+    __table_args__ = (
+        CheckConstraint("expires_at > created_at", name="ck_mail_ui_session_expiry"),
+        Index("idx_mail_ui_sessions_expiry", "expires_at"),
+    )
+
+    session_id_hash: str = Field(primary_key=True, max_length=64)
+    username: str = Field(max_length=64, index=True)
+    created_at: int = Field(sa_column=Column(BigInteger, nullable=False))
+    expires_at: int = Field(sa_column=Column(BigInteger, nullable=False))
+    revoked_at: Optional[int] = Field(
+        default=None,
+        sa_column=Column(BigInteger, nullable=True, index=True),
+    )
 
 
 class AgentConversationBinding(SQLModel, table=True):

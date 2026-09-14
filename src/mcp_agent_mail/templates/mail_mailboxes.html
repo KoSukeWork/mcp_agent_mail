@@ -35,7 +35,7 @@
 {% endmacro %}
 
 {% macro script(home=false) %}
-<script>
+<script nonce="{{ csp_nonce }}">
 function mailboxManager() {
   return {
     items: {{ mailboxes | tojson }}, category: {{ category | tojson }}, searchQuery: '', busy: false, notice: '',
@@ -48,6 +48,15 @@ function mailboxManager() {
     matches(p) {
       const categoryMatches = this.category === 'all' ? p.mailbox_state === 'active' : this.group(p) === this.category;
       return categoryMatches && (p.human_key + ' ' + p.slug).toLowerCase().includes(this.searchQuery.toLowerCase());
+    },
+    hasMatchingItems() {
+      return this.items.some(p => this.matches(p));
+    },
+    hasMatchingArchivedItems(ids) {
+      return this.items.some(p => this.matches(p) && ids.includes(p.id));
+    },
+    openProject(event, href) {
+      if (!event.target.closest('a,button,input,select')) window.location.href = href;
     },
     count(category) { return this.items.filter(p => category === 'all' ? p.mailbox_state === 'active' : this.group(p) === category).length; },
     date(value) { return value ? new Date(value).toLocaleString({{ current_locale() | tojson }}) : '—'; },

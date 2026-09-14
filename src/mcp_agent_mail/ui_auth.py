@@ -7,11 +7,13 @@ HttpOnly session cookie so browsers are not blocked by machine tokens.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import importlib
 import json
+import re
 import secrets
 import time
 from collections.abc import Callable
@@ -24,30 +26,58 @@ from urllib.parse import quote
 
 from fastapi import Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from sqlalchemy import delete
+from sqlmodel import col
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp
 
 from .config import MAIL_UI_USERNAME_RE, Settings
+from .db import get_session
+from .models import MailUISessionRecord
 
 MAIL_UI_SESSION_COOKIE: Final = "agent_mail_ui_session"
 MAIL_UI_LOGIN_CSRF_COOKIE: Final = "agent_mail_ui_login_csrf"
 MAIL_UI_LOGIN_PATH: Final = "/mail/login"
 MAIL_UI_LOGOUT_PATH: Final = "/mail/logout"
 MAIL_UI_COOKIE_PATH: Final = "/mail"
-SESSION_VERSION: Final = 1
-_SESSION_PURPOSE: Final = b"mcp-agent-mail-ui-session-v1"
+SESSION_VERSION: Final = 2
+_SESSION_PURPOSE: Final = b"mcp-agent-mail-ui-session-v2"
 _UNSAFE_METHODS: Final = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _LOGIN_BACKOFF_AFTER_FAILURES: Final = 5
 _LOGIN_BACKOFF_MAX_SECONDS: Final = 16.0
 _LOGIN_WINDOW_SECONDS: Final = 60.0
+_LOGIN_GLOBAL_WINDOW_SECONDS: Final = 3600.0
 _LOGIN_STATE_TTL_SECONDS: Final = 900.0
 _LOGIN_MAX_TRACKED_CLIENTS: Final = 10_000
+_SESSION_ID_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
+
+
+def create_rate_limit_redis_client(
+    redis_url: str,
+    *,
+    connect_timeout_seconds: float,
+    socket_timeout_seconds: float,
+) -> Any:
+    """Create a bounded Redis client shared by HTTP and login limiters."""
+
+    try:
+        redis_asyncio = importlib.import_module("redis.asyncio")
+        return redis_asyncio.Redis.from_url(
+            redis_url,
+            socket_connect_timeout=max(0.1, float(connect_timeout_seconds)),
+            socket_timeout=max(0.1, float(socket_timeout_seconds)),
+            health_check_interval=30,
+            retry_on_timeout=False,
+        )
+    except Exception as exc:
+        raise RuntimeError("Redis rate limiting backend is unavailable") from exc
 
 
 @dataclass(frozen=True, slots=True)
 class MailUISession:
     """Verified human mail-UI session."""
 
+    session_id: str
     username: str
     csrf: str
     expires_at: int
@@ -79,20 +109,34 @@ class LoginAttemptLimiter:
         state_ttl_seconds: float = _LOGIN_STATE_TTL_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
         redis_url: str | None = None,
+        redis_prefix: str = "mcp-agent-mail",
+        redis_connect_timeout_seconds: float = 2.0,
+        redis_socket_timeout_seconds: float = 2.0,
+        global_per_hour: int = 200,
+        redis_client: Any | None = None,
     ) -> None:
         self._per_minute = max(0, int(per_minute))
+        self._global_per_hour = max(0, int(global_per_hour))
         self._max_entries = max(1, int(max_entries))
         self._state_ttl_seconds = max(_LOGIN_WINDOW_SECONDS, float(state_ttl_seconds))
+        self._redis_operation_timeout_seconds = max(
+            0.1,
+            float(redis_socket_timeout_seconds),
+        )
         self._monotonic = monotonic
         self._states: dict[str, _LoginAttemptState] = {}
         self._last_cleanup = monotonic()
-        self._redis: Any | None = None
-        if redis_url:
-            try:
-                redis_asyncio = importlib.import_module("redis.asyncio")
-                self._redis = redis_asyncio.Redis.from_url(redis_url)
-            except Exception as exc:
-                raise RuntimeError("Redis login rate limiting backend is unavailable") from exc
+        self._global_window_started = self._last_cleanup
+        self._global_attempts = 0
+        self._redis_namespace = f"{{{redis_prefix}:mail-ui-login}}"
+        self._redis: Any | None = redis_client
+        self._owns_redis = redis_client is None and bool(redis_url)
+        if self._redis is None and redis_url:
+            self._redis = create_rate_limit_redis_client(
+                redis_url,
+                connect_timeout_seconds=redis_connect_timeout_seconds,
+                socket_timeout_seconds=redis_socket_timeout_seconds,
+            )
 
     @property
     def entry_count(self) -> int:
@@ -101,46 +145,83 @@ class LoginAttemptLimiter:
         return len(self._states)
 
     async def allow(self, client_ip: str) -> bool:
-        if self._per_minute <= 0:
+        if self._per_minute <= 0 and self._global_per_hour <= 0:
             return True
         if self._redis is not None:
-            result = await self._redis.eval(
+            async with asyncio.timeout(self._redis_operation_timeout_seconds):
+                result = await self._redis.eval(
                 """
-                local key = KEYS[1]
+                local ip_key = KEYS[1]
+                local clients_key = KEYS[2]
+                local global_key = KEYS[3]
                 local now = tonumber(redis.call('TIME')[1])
-                local limit = tonumber(ARGV[1])
+                local ip_limit = tonumber(ARGV[1])
                 local ttl = tonumber(ARGV[2])
-                local state = redis.call('HMGET', key, 'window_started', 'attempts', 'blocked_until')
+                local max_clients = tonumber(ARGV[3])
+                local global_limit = tonumber(ARGV[4])
+                redis.call('ZREMRANGEBYSCORE', clients_key, '-inf', now - ttl)
+                if redis.call('EXISTS', ip_key) == 0 and redis.call('ZCARD', clients_key) >= max_clients then
+                    return 0
+                end
+                local state = redis.call('HMGET', ip_key, 'window_started', 'attempts', 'blocked_until')
                 local started = tonumber(state[1]) or now
                 local attempts = tonumber(state[2]) or 0
                 local blocked_until = tonumber(state[3]) or 0
                 if now < blocked_until then
-                    redis.call('EXPIRE', key, ttl)
                     return 0
                 end
                 if now - started >= 60 then
                     started = now
                     attempts = 0
                 end
-                if attempts >= limit then
-                    redis.call('EXPIRE', key, ttl)
+                if ip_limit > 0 and attempts >= ip_limit then
                     return 0
                 end
-                redis.call('HSET', key,
+                local global_state = redis.call('HMGET', global_key, 'window_started', 'attempts')
+                local global_started = tonumber(global_state[1]) or now
+                local global_attempts = tonumber(global_state[2]) or 0
+                if now - global_started >= 3600 then
+                    global_started = now
+                    global_attempts = 0
+                end
+                if global_limit > 0 and global_attempts >= global_limit then
+                    return 0
+                end
+                redis.call('HSET', ip_key,
                     'window_started', started,
-                    'attempts', attempts + 1,
+                    'attempts', attempts + (ip_limit > 0 and 1 or 0),
                     'last_seen', now)
-                redis.call('EXPIRE', key, ttl)
+                redis.call('EXPIRE', ip_key, ttl)
+                redis.call('ZADD', clients_key, now, ip_key)
+                redis.call('EXPIRE', clients_key, ttl)
+                if global_limit > 0 then
+                    redis.call('HSET', global_key,
+                        'window_started', global_started,
+                        'attempts', global_attempts + 1)
+                    redis.call('EXPIRE', global_key, 3600)
+                end
                 return 1
                 """,
-                1,
+                3,
                 self._redis_key(client_ip),
+                self._redis_clients_key(),
+                self._redis_global_key(),
                 self._per_minute,
                 int(self._state_ttl_seconds),
+                self._max_entries,
+                self._global_per_hour,
             )
             return bool(result)
         now = self._monotonic()
         self._cleanup_if_needed(now)
+        if now - self._global_window_started >= _LOGIN_GLOBAL_WINDOW_SECONDS:
+            self._global_window_started = now
+            self._global_attempts = 0
+        if self._global_per_hour > 0 and self._global_attempts >= self._global_per_hour:
+            return False
+        if self._per_minute <= 0:
+            self._global_attempts += 1
+            return True
         state = self._states.get(client_ip)
         if state is None:
             if len(self._states) >= self._max_entries:
@@ -156,13 +237,16 @@ class LoginAttemptLimiter:
         if state.attempts >= self._per_minute:
             return False
         state.attempts += 1
+        if self._global_per_hour > 0:
+            self._global_attempts += 1
         return True
 
     async def record_failure(self, client_ip: str) -> None:
         if self._per_minute <= 0:
             return
         if self._redis is not None:
-            await self._redis.eval(
+            async with asyncio.timeout(self._redis_operation_timeout_seconds):
+                await self._redis.eval(
                 """
                 local key = KEYS[1]
                 local now = tonumber(redis.call('TIME')[1])
@@ -200,20 +284,35 @@ class LoginAttemptLimiter:
 
     async def record_success(self, client_ip: str) -> None:
         if self._redis is not None:
-            await self._redis.delete(self._redis_key(client_ip))
+            async with asyncio.timeout(self._redis_operation_timeout_seconds):
+                await self._redis.eval(
+                """
+                redis.call('ZREM', KEYS[2], KEYS[1])
+                return redis.call('DEL', KEYS[1])
+                """,
+                2,
+                self._redis_key(client_ip),
+                self._redis_clients_key(),
+            )
             return
         self._states.pop(client_ip, None)
 
     async def close(self) -> None:
-        if self._redis is not None:
+        if self._redis is not None and self._owns_redis:
             close = getattr(self._redis, "aclose", None)
             if close is not None:
-                await close()
+                async with asyncio.timeout(self._redis_operation_timeout_seconds):
+                    await close()
 
-    @staticmethod
-    def _redis_key(client_ip: str) -> str:
+    def _redis_key(self, client_ip: str) -> str:
         digest = hashlib.sha256(client_ip.encode("utf-8")).hexdigest()
-        return f"mcp-agent-mail:mail-ui-login:{digest}"
+        return f"{self._redis_namespace}:ip:{digest}"
+
+    def _redis_clients_key(self) -> str:
+        return f"{self._redis_namespace}:clients"
+
+    def _redis_global_key(self) -> str:
+        return f"{self._redis_namespace}:global"
 
     def _cleanup_if_needed(self, now: float) -> None:
         if (
@@ -249,12 +348,18 @@ def is_mail_logout_path(path: str) -> bool:
 def credentials_configured(settings: Settings) -> bool:
     """Return whether a human mail-UI password is configured."""
 
-    return bool((settings.http.mail_ui_password or "").strip())
+    return bool(settings.http.mail_ui_password)
 
 
 def current_mail_ui_username() -> str | None:
     session = _current_mail_ui_session.get()
     return None if session is None else session.username
+
+
+def current_mail_ui_session() -> MailUISession | None:
+    """Return the request's verified Mail UI session, if any."""
+
+    return _current_mail_ui_session.get()
 
 
 def current_mail_ui_csrf() -> str | None:
@@ -282,7 +387,7 @@ def session_signing_key(settings: Settings) -> bytes | None:
 
     explicit = (settings.http.mail_ui_session_secret or "").strip()
     username = _configured_username(settings)
-    password = (settings.http.mail_ui_password or "").strip()
+    password = settings.http.mail_ui_password or ""
     if not explicit or not password:
         return None
     return hmac.new(
@@ -291,7 +396,9 @@ def session_signing_key(settings: Settings) -> bytes | None:
         + b"\0"
         + username.encode("utf-8")
         + b"\0"
-        + password.encode("utf-8"),
+        + password.encode("utf-8")
+        + b"\0"
+        + str(settings.http.mail_ui_session_ttl_seconds).encode("ascii"),
         hashlib.sha256,
     ).digest()
 
@@ -325,11 +432,14 @@ def parse_session_cookie(
         return None
     if not isinstance(payload_obj, dict):
         return None
+    session_id = payload_obj.get("sid")
     username = payload_obj.get("u")
     csrf = payload_obj.get("csrf")
     expires_at = payload_obj.get("exp")
     version = payload_obj.get("v")
     if version != SESSION_VERSION:
+        return None
+    if not isinstance(session_id, str) or not _SESSION_ID_RE.fullmatch(session_id):
         return None
     if not isinstance(username, str) or not MAIL_UI_USERNAME_RE.fullmatch(username):
         return None
@@ -340,14 +450,19 @@ def parse_session_cookie(
     current = _now_ts() if now is None else now
     if expires_at <= current:
         return None
-    return MailUISession(username=username, csrf=csrf, expires_at=expires_at)
+    return MailUISession(
+        session_id=session_id,
+        username=username,
+        csrf=csrf,
+        expires_at=expires_at,
+    )
 
 
 def verify_mail_ui_credentials(settings: Settings, username: str, password: str) -> bool:
     """Constant-time comparison of the configured operator credentials."""
 
     expected_user = _configured_username(settings)
-    expected_password = (settings.http.mail_ui_password or "").strip()
+    expected_password = settings.http.mail_ui_password or ""
     provided_user = username.strip()
     provided_password = password
     if not expected_password or not provided_password or len(provided_password) > 1024:
@@ -358,7 +473,59 @@ def verify_mail_ui_credentials(settings: Settings, username: str, password: str)
     return user_ok and password_ok
 
 
-def issue_mail_ui_session(
+def _session_id_hash(session_id: str) -> str:
+    return hashlib.sha256(session_id.encode("ascii")).hexdigest()
+
+
+async def _register_mail_ui_session(session: MailUISession) -> None:
+    now = _now_ts()
+    async with get_session() as db_session:
+        await db_session.execute(
+            delete(MailUISessionRecord).where(col(MailUISessionRecord.expires_at) <= now)
+        )
+        db_session.add(
+            MailUISessionRecord(
+                session_id_hash=_session_id_hash(session.session_id),
+                username=session.username,
+                created_at=now,
+                expires_at=session.expires_at,
+            )
+        )
+        await db_session.commit()
+
+
+async def mail_ui_session_is_active(session: MailUISession) -> bool:
+    """Validate a signed cookie against its persistent revocation record."""
+
+    async with get_session() as db_session:
+        record = await db_session.get(
+            MailUISessionRecord,
+            _session_id_hash(session.session_id),
+        )
+    return bool(
+        record is not None
+        and record.revoked_at is None
+        and record.username == session.username
+        and record.expires_at == session.expires_at
+        and record.expires_at > _now_ts()
+    )
+
+
+async def revoke_mail_ui_session(session: MailUISession) -> None:
+    """Persistently revoke a Mail UI session so copied cookies stop working."""
+
+    async with get_session() as db_session:
+        record = await db_session.get(
+            MailUISessionRecord,
+            _session_id_hash(session.session_id),
+        )
+        if record is not None and record.revoked_at is None:
+            record.revoked_at = _now_ts()
+            db_session.add(record)
+            await db_session.commit()
+
+
+async def issue_mail_ui_session(
     response: Response,
     *,
     request: Request,
@@ -370,11 +537,24 @@ def issue_mail_ui_session(
     secret = session_signing_key(settings)
     if secret is None:
         raise RuntimeError("Mail UI session secret is not configured")
+    session_id = secrets.token_urlsafe(32)
     csrf = secrets.token_urlsafe(32)
     expires_at = _now_ts() + int(settings.http.mail_ui_session_ttl_seconds)
-    session = MailUISession(username=username, csrf=csrf, expires_at=expires_at)
+    session = MailUISession(
+        session_id=session_id,
+        username=username,
+        csrf=csrf,
+        expires_at=expires_at,
+    )
+    await _register_mail_ui_session(session)
     token = sign_session_payload(
-        {"v": SESSION_VERSION, "u": username, "csrf": csrf, "exp": expires_at},
+        {
+            "v": SESSION_VERSION,
+            "sid": session_id,
+            "u": username,
+            "csrf": csrf,
+            "exp": expires_at,
+        },
         secret=secret,
     )
     response.set_cookie(
@@ -457,9 +637,22 @@ class MailUIAuthMiddleware(BaseHTTPMiddleware):
                 request.cookies.get(MAIL_UI_SESSION_COOKIE),
                 secret=secret,
             )
-            if session is not None and not _consteq(
-                _configured_username(self._settings), session.username
-            ):
+        if session is not None and not _consteq(
+            _configured_username(self._settings), session.username
+        ):
+            session = None
+        if session is not None:
+            try:
+                active = await mail_ui_session_is_active(session)
+            except Exception:
+                return _no_store(
+                    JSONResponse(
+                        {"detail": "Mail UI session validation is temporarily unavailable"},
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        headers={"Retry-After": "5"},
+                    )
+                )
+            if not active:
                 session = None
         token = _current_mail_ui_session.set(session)
         try:
