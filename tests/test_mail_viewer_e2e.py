@@ -166,6 +166,21 @@ async def _setup_test_data(
 
 
 @pytest.mark.asyncio
+async def test_root_redirects_to_mail(isolated_env):
+    """The configured domain root should open the usable mail UI."""
+    settings = _config.get_settings()
+    server = build_mcp_server()
+    app = build_http_app(settings, server)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/", follow_redirects=False)
+
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/mail"
+
+
+@pytest.mark.asyncio
 async def test_mail_unified_inbox_html(isolated_env):
     """Test GET /mail returns HTML unified inbox."""
     settings = _config.get_settings()
@@ -179,8 +194,10 @@ async def test_mail_unified_inbox_html(isolated_env):
         resp = await client.get("/mail")
         assert resp.status_code == 200
         assert "text/html" in resp.headers.get("content-type", "")
-        # Should contain some HTML structure
         assert "<html" in resp.text.lower() or "<!doctype" in resp.text.lower()
+        assert 'x-data="unifiedInboxManager()"' in resp.text
+        assert "Alpine.data('unifiedInboxManager'" in resp.text
+        assert " onclick=" not in resp.text.lower()
 
 
 @pytest.mark.asyncio

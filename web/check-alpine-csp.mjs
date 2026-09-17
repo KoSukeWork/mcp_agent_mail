@@ -10,15 +10,25 @@ const alpineSources = [
     .map((name) => path.join(templatesRoot, name)),
   path.resolve('src/mcp_agent_mail/viewer_assets/index.html'),
 ];
+const registrationSources = [
+  ...alpineSources,
+  path.resolve('src/mcp_agent_mail/viewer_assets/viewer.js'),
+];
 const alpineAttributeStart = /\s((?:x-[\w:.-]+)|(?:@[\w:.-]+)|(?::[\w:.-]+))\s*=\s*(["'])/g;
+const alpineDataRegistration = /(?:window\.)?Alpine\.data\(\s*(["'])([$A-Z_a-z][$\w]*)\1/g;
+const inlineEventHandler = /\s(on[a-z][\w:.-]*)\s*=\s*(["'])/gi;
+const namedDataProvider = /^\s*([$A-Z_a-z][$\w]*)\s*(?:\(|$)/;
 const ignoredAttribute = /^(?:x-transition|x-ref|x-cloak)/;
 const unsupportedSyntax = [
   [/=>/, 'arrow function'],
   [/^\s*`/, 'template literal'],
   [/\?\./, 'optional chaining'],
   [/^\s*(?:const|let|var|if|switch|try|class)\b/, 'statement syntax'],
+  [/\bMath\./, 'global Math reference'],
 ];
 const failures = [];
+const namedDataProviders = new Map();
+const registeredDataProviders = new Set();
 let checkedExpressions = 0;
 
 function decodeEntities(expression) {
@@ -74,12 +84,37 @@ if (
   failures.push('Alpine attribute scanner failed its single-quote/Jinja extraction probe.');
 }
 
+for (const sourcePath of registrationSources) {
+  const source = fs.readFileSync(sourcePath, 'utf8');
+  alpineDataRegistration.lastIndex = 0;
+  let match;
+  while ((match = alpineDataRegistration.exec(source)) !== null) {
+    registeredDataProviders.add(match[2]);
+  }
+}
+
 for (const sourcePath of alpineSources) {
   const filename = path.relative(process.cwd(), sourcePath);
   const source = fs.readFileSync(sourcePath, 'utf8');
+
+  inlineEventHandler.lastIndex = 0;
+  let inlineHandlerMatch;
+  while ((inlineHandlerMatch = inlineEventHandler.exec(source)) !== null) {
+    failures.push(`${filename}: inline ${inlineHandlerMatch[1]} handler is blocked by the mail CSP`);
+  }
+
   for (const [attribute, rawExpression] of extractAlpineAttributes(source)) {
     let expression = decodeEntities(rawExpression);
     if (ignoredAttribute.test(attribute)) continue;
+
+    if (attribute === 'x-data') {
+      const providerMatch = expression.match(namedDataProvider);
+      if (providerMatch) {
+        const locations = namedDataProviders.get(providerMatch[1]) ?? new Set();
+        locations.add(filename);
+        namedDataProviders.set(providerMatch[1], locations);
+      }
+    }
 
     for (const [pattern, description] of unsupportedSyntax) {
       if (pattern.test(expression)) failures.push(`${filename}: ${attribute} uses ${description}`);
@@ -97,6 +132,14 @@ for (const sourcePath of alpineSources) {
     } catch (error) {
       failures.push(`${filename}: ${attribute} ${JSON.stringify(expression)}: ${error.message}`);
     }
+  }
+}
+
+for (const [provider, locations] of namedDataProviders) {
+  if (!registeredDataProviders.has(provider)) {
+    failures.push(
+      `${[...locations].join(', ')}: x-data provider ${provider} is not registered with Alpine.data()`,
+    );
   }
 }
 

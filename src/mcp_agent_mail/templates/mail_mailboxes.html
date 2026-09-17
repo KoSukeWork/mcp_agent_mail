@@ -58,6 +58,12 @@ function mailboxManager() {
     openProject(event, href) {
       if (!event.target.closest('a,button,input,select')) window.location.href = href;
     },
+    focusProjectSearch() {
+      const input = document.getElementById('project-filter-input');
+      if (!input) return;
+      input.focus();
+      input.select();
+    },
     count(category) { return this.items.filter(p => category === 'all' ? p.mailbox_state === 'active' : this.group(p) === category).length; },
     date(value) { return value ? new Date(value).toLocaleString({{ current_locale() | tojson }}) : '—'; },
     async trash(p) {

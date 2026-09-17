@@ -188,7 +188,7 @@
       <template x-for="(item, index) in filteredItems" :key="item.id">
         <div class="bg-white dark:bg-slate-800 rounded-xl shadow-soft border-2 transition-all duration-300 transform hover:-translate-y-0.5 hover:shadow-medium hover:border-primary-300 dark:hover:border-primary-700 overflow-hidden stagger-item"
              :class="item.unread ? 'border-primary-300 dark:border-primary-700 bg-primary-50/30 dark:bg-primary-900/10' : 'border-slate-200 dark:border-slate-700'"
-               :style="'animation-delay: ' + Math.min(index * 0.05, 1.0) + 's;'">
+               :style="animationDelay(index)">
           <div class="flex items-start p-6 gap-4">
             <!-- Checkbox for bulk selection -->
                   <div class="shrink-0 pt-1">
@@ -376,6 +376,9 @@
       get needsAckCount() {
         // ack_required messages still awaiting ack from this recipient.
         return this.items.reduce((n, item) => n + (item.needs_ack ? 1 : 0), 0);
+      },
+      animationDelay(index) {
+        return `animation-delay: ${Math.min(index * 0.05, 1.0)}s;`;
       },
 
       init() {

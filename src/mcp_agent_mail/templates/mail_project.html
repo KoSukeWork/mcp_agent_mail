@@ -50,7 +50,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="space-y-8 page-transition">
+<div class="space-y-8 page-transition" x-data="projectArchiveControls({{ project.id }})">
   <!-- Project Hero Header -->
   <div class="relative overflow-hidden bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-soft border border-slate-200 dark:border-slate-700">
     <div class="flex items-start justify-between">
@@ -85,7 +85,7 @@
         </div>
       </div>
       <!-- Archive / Unarchive Button -->
-      <div class="flex items-center gap-2" x-data="projectArchiveControls({{ project.id }})">
+      <div class="flex items-center gap-2">
         {% if project.archived_at %}
         <button @click="updateArchive('/mail/api/unarchive-project')"
                 class="inline-flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg shadow-sm hover:shadow-md transition-all duration-200">
@@ -418,14 +418,16 @@
                 <i data-lucide="inbox" class="w-4 h-4"></i>
                     <span>{{ _("Inbox") }}</span>
               </a>
-                  <button onclick='copyToClipboard(this.dataset.agentName, {{ _("Agent name copied!") | tojson }})'
+                  <button type="button" @click="copyAgentName($event)"
                       data-agent-name="{{ a.name }}"
                       class="p-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md"
                       data-tippy-content="{{ _("Copy agent name") }}"
                       aria-label="{{ _("Copy agent name") }}">
                 <i data-lucide="copy" class="w-4 h-4"></i>
               </button>
-              <button onclick="if(confirm('Retire agent ' + {{ a.name | tojson | forceescape }} + '? It will stop accepting new messages but message history is preserved.')) fetch('/mail/api/retire-agent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_id:{{ a.id }}})}).then(r=>r.json()).then(d=>{if(d.success) location.reload()})"
+              <button type="button" @click="retireAgent($event)"
+                      data-agent-id="{{ a.id }}"
+                      data-agent-name="{{ a.name }}"
                       class="p-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 text-slate-700 dark:text-slate-300 hover:text-amber-700 dark:hover:text-amber-400 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md"
                       data-tippy-content="{{ _("Retire agent") }}"
                       aria-label="{{ _("Retire agent") }}">
@@ -480,7 +482,8 @@
                     <i data-lucide="inbox" class="w-4 h-4"></i>
                     <span>{{ _("View Inbox") }}</span>
                   </a>
-                  <button onclick="fetch('/mail/api/unretire-agent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_id:{{ a.id }}})}).then(r=>r.json()).then(d=>{if(d.success) location.reload()})"
+                  <button type="button" @click="unretireAgent($event)"
+                          data-agent-id="{{ a.id }}"
                           class="p-2.5 bg-green-100 dark:bg-green-900/30 hover:bg-green-200 dark:hover:bg-green-800/40 text-green-700 dark:text-green-400 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md"
                             data-tippy-content="{{ _("Restore agent to active") }}"
                             aria-label="{{ _("Restore agent to active") }}">
@@ -534,6 +537,44 @@
         });
         const result = await response.json();
         if (result.success) window.location.reload();
+      },
+      async copyAgentName(event) {
+        const agentName = event.currentTarget.dataset.agentName || '';
+        if (!agentName) return;
+        await window.copyToClipboard(agentName, {{ _("Agent name copied!") | tojson }});
+      },
+      async retireAgent(event) {
+        const button = event.currentTarget;
+        const agentId = Number(button.dataset.agentId);
+        const agentName = button.dataset.agentName || '';
+        if (!Number.isInteger(agentId) || agentId < 1) return;
+        const message = {{ _('Retire agent {name}? It will stop accepting new messages but message history is preserved.') | tojson }}.replace('{name}', agentName);
+        if (!window.confirm(message)) return;
+        await this.updateAgent('/mail/api/retire-agent', agentId, button);
+      },
+      async unretireAgent(event) {
+        const button = event.currentTarget;
+        const agentId = Number(button.dataset.agentId);
+        if (!Number.isInteger(agentId) || agentId < 1) return;
+        await this.updateAgent('/mail/api/unretire-agent', agentId, button);
+      },
+      async updateAgent(path, agentId, button) {
+        button.disabled = true;
+        try {
+          const response = await fetch(path, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({agent_id: agentId})
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success) {
+            throw new Error(result.detail || result.error || {{ _('Unable to update agent') | tojson }});
+          }
+          window.location.reload();
+        } catch (error) {
+          button.disabled = false;
+          window.showToast(error.message || {{ _('Unable to update agent') | tojson }}, 'error', 3000);
+        }
       }
     };
   }

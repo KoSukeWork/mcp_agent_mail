@@ -28,7 +28,7 @@
 
       <!-- Action Buttons -->
       <div class="flex items-center justify-center gap-4 flex-wrap">
-        <button onclick="window.history.back()"
+        <button @click="navigateBack()"
                 class="px-6 py-3 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 font-medium rounded-lg transition-colors flex items-center gap-2">
           <i data-lucide="arrow-left" class="w-4 h-4"></i>
           {{ _("Go Back") }}
@@ -38,7 +38,7 @@
           <i data-lucide="home" class="w-4 h-4"></i>
           {{ _("Go Home") }}
         </a>
-        <button onclick="location.reload()"
+        <button @click="reloadPage()"
                 class="px-6 py-3 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 font-medium rounded-lg transition-colors flex items-center gap-2">
           <i data-lucide="refresh-cw" class="w-4 h-4"></i>
           {{ _("Retry") }}

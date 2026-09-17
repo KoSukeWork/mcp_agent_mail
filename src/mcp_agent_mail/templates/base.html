@@ -75,8 +75,9 @@
     <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/locale/zh-cn.min.js" integrity="sha384-MFpFxl1kKRYG95IncC48NdG5HhP8aMxwZonKGUnRrz1zMivjv87ZSMyGOVZ5J6wx" crossorigin="anonymous"></script>
     {% endif %}
 
-    <!-- Tippy.js for beautiful tooltips -->
-    <script src="https://unpkg.com/tippy.js@6.3.7/dist/tippy-bundle.umd.min.js" integrity="sha384-AiTRpehQ7zqeua0Ypfa6Q4ki/ddhczZxrKtiQbTQUlJIhBkTeyoZP9/W/5ulFt29" crossorigin="anonymous"></script>
+    <!-- Tippy.js for beautiful tooltips (CSP-safe build with explicit Popper dependency) -->
+    <script src="https://unpkg.com/@popperjs/core@2.11.8/dist/umd/popper.min.js" integrity="sha384-I7E8VVD/ismYTF4hNIPjVp/Zjvgyol6VFvRkX/vR+Vc4jQkC+hVqc2pM8ODewa9r" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/tippy.js@6.3.7/dist/tippy.umd.min.js" integrity="sha384-pjtv4LzKGI/lGxchW/wd/upB/HsGOP/Q2iPYyDU8qo2bp4JLbN34hQkdAArvidZX" crossorigin="anonymous"></script>
     <link rel="stylesheet" href="https://unpkg.com/tippy.js@6.3.7/dist/tippy.css" integrity="sha384-IBgYl+I5X6ZDZXI5zv1vsSE3VopDomz4BxSu/GlxaPHfFtcrJ3uj70z1w6srO9zU" crossorigin="anonymous" />
     <link rel="stylesheet" href="https://unpkg.com/tippy.js@6.3.7/themes/light.css" integrity="sha384-O3zpKcmNU1sKUh+lNrViF6kgcRBBz27MhfBgmK1g1Te/UNvsu7l+jGYeNK9vXpKj" crossorigin="anonymous" />
     <link rel="stylesheet" href="https://unpkg.com/tippy.js@6.3.7/animations/scale.css" integrity="sha384-8N4IYsfQ62z/mL0F4DjUmQ/Zf5ezlpJAEwFWjgA0uLAtYXBZjyTiTARsn1MbBlRQ" crossorigin="anonymous" />
@@ -1023,7 +1024,7 @@
           <div class="absolute right-2 -top-8 px-2 py-1 bg-gradient-to-r from-primary-600 to-purple-600 text-white text-xs font-bold rounded-full shadow-lg"
                x-show="progress > 0 && progress < 100"
                x-transition>
-            <span x-text="Math.round(progress)"></span>%
+            <span x-text="roundedProgress"></span>%
           </div>
         </div>
 
@@ -2089,7 +2090,7 @@
             {% endif %}
 
             <!-- Help Button -->
-            <button onclick="window.restartTutorial()"
+            <button @click="$dispatch('restart-tutorial')"
                     class="p-2 rounded-lg hover:bg-primary-100 dark:hover:bg-primary-900/30 text-primary-600 dark:text-primary-400 transition-all duration-200 relative group"
                   data-tippy-content="{{ _('Show interactive tutorial') }}"
                   aria-label="{{ _('Show help') }}">
@@ -2101,7 +2102,7 @@
             </button>
 
           <!-- Interface Language Toggle -->
-          <button onclick="switchInterfaceLanguage('{{ 'en' if current_locale() == 'zh-CN' else 'zh-CN' }}')"
+          <button @click="switchInterfaceLanguage('{{ 'en' if current_locale() == 'zh-CN' else 'zh-CN' }}')"
                   class="h-9 min-w-9 px-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-sm font-semibold"
                   data-tippy-content="{{ _("Interface language") }}"
                   aria-label="{{ _("Switch to English") if current_locale() == 'zh-CN' else _("Switch to Simplified Chinese") }}">
@@ -2154,12 +2155,6 @@
 
     <!-- Alpine.js Components -->
     <script nonce="{{ csp_nonce }}">
-      function switchInterfaceLanguage(locale) {
-        const url = new URL(window.location.href);
-        url.searchParams.set('lang', locale);
-        window.location.assign(url.toString());
-      }
-
       function darkModeController() {
         return {
           darkMode: document.documentElement.classList.contains('dark'),
@@ -2197,6 +2192,17 @@
           toggleDarkMode() {
             this.darkMode = !this.darkMode;
           },
+          switchInterfaceLanguage(locale) {
+            const url = new URL(window.location.href);
+            url.searchParams.set('lang', locale);
+            window.location.assign(url.toString());
+          },
+          navigateBack() {
+            window.history.back();
+          },
+          reloadPage() {
+            window.location.reload();
+          },
         };
       }
 
@@ -2229,6 +2235,9 @@
           get progress() {
             if (this.steps.length === 0) return 0;
             return ((this.currentStep + 1) / this.steps.length) * 100;
+          },
+          get roundedProgress() {
+            return Math.round(this.progress);
           },
 
           init() {
@@ -2788,6 +2797,39 @@
           }
         }
       }
+
+      // The CSP build does not resolve global factory functions from x-data.
+      // Register every named controller before Alpine starts scanning the page.
+      document.addEventListener('alpine:init', () => {
+        if (!window.Alpine) return;
+        if (typeof window.darkModeController === 'function') {
+          window.Alpine.data('darkModeController', window.darkModeController);
+        }
+        if (typeof window.commandPalette === 'function') {
+          window.Alpine.data('commandPalette', window.commandPalette);
+        }
+        if (typeof window.tutorialManager === 'function') {
+          window.Alpine.data('tutorialManager', window.tutorialManager);
+        }
+        if (typeof window.toastManager === 'function') {
+          window.Alpine.data('toastManager', window.toastManager);
+        }
+        if (typeof window.inboxManager === 'function') {
+          window.Alpine.data('inboxManager', window.inboxManager);
+        }
+        if (typeof window.mailboxManager === 'function') {
+          window.Alpine.data('mailboxManager', window.mailboxManager);
+        }
+        if (typeof window.projectArchiveControls === 'function') {
+          window.Alpine.data('projectArchiveControls', window.projectArchiveControls);
+        }
+        if (typeof window.unifiedInboxManager === 'function') {
+          window.Alpine.data('unifiedInboxManager', window.unifiedInboxManager);
+        }
+        if (typeof window.overseerComposer === 'function') {
+          window.Alpine.data('overseerComposer', window.overseerComposer);
+        }
+      }, { once: true });
 
       // Initialize Lucide icons after page load
       document.addEventListener('DOMContentLoaded', () => {

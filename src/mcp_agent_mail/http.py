@@ -4370,6 +4370,15 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
     # explicit for the type checker.
     cast(Any, fastapi_app).openapi = _custom_openapi
 
+    # The root URL is the human entry point. Keep an explicit route ahead of
+    # the catch-all static mount so a configured domain opens the mail UI
+    # instead of the developer SPA placeholder. A deployment that deliberately
+    # mounts MCP itself at "/" keeps that API route unchanged.
+    if base_no_slash != "/":
+        @fastapi_app.get("/", include_in_schema=False)
+        async def mail_home_redirect() -> RedirectResponse:
+            return RedirectResponse("/mail", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
     # Static web UI (SPA) routing support
     def _resolve_web_root() -> Path | None:
         candidates: list[Path] = []
