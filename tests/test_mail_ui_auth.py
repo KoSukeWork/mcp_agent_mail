@@ -349,7 +349,7 @@ async def test_mail_login_is_reachable_without_bearer(isolated_env, monkeypatch)
         assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
         assert response.headers["x-frame-options"] == "DENY"
         assert response.headers["x-content-type-options"] == "nosniff"
-        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["referrer-policy"] == "same-origin"
         login_csp = response.headers["content-security-policy"]
         assert "unsafe-inline" not in login_csp
         assert "unsafe-eval" not in login_csp
@@ -765,6 +765,13 @@ async def test_cross_site_login_does_not_consume_rate_limit(
             headers={"Origin": "https://evil.example"},
         )
         assert attack.status_code == 403
+
+        opaque_origin = await client.post(
+            "/mail/login",
+            data={"username": "operator", "password": "wrong"},
+            headers={"Origin": "null"},
+        )
+        assert opaque_origin.status_code == 403
 
         page = await client.get("/mail/login")
         legitimate = await client.post(

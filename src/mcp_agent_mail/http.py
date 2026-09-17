@@ -2462,7 +2462,12 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             html.headers["Pragma"] = "no-cache"
             html.headers["X-Frame-Options"] = "DENY"
             html.headers["X-Content-Type-Options"] = "nosniff"
-            html.headers["Referrer-Policy"] = "no-referrer"
+            # Chromium serializes the Origin of a same-origin form POST as
+            # `null` when the source document uses `no-referrer`, which makes
+            # our fail-closed Origin/Referer CSRF check reject legitimate
+            # logins. `same-origin` preserves that verification signal while
+            # still suppressing the Referer on cross-origin navigation.
+            html.headers["Referrer-Policy"] = "same-origin"
             html.status_code = status_code
             return html
 
