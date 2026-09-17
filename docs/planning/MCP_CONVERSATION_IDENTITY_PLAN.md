@@ -309,7 +309,7 @@ The browser flow is a compatibility implementation of the same server-side confi
 - Do not place a reusable Agent credential in the URL.
 - Prefer an authenticated browser session plus a non-secret request ID.
 - If a one-time browser challenge is required, store only its hash server-side and keep it out of model-visible results and server access logs.
-- Use HTTPS for remote confirmation origins.
+- Use HTTPS for remote confirmation origins by default. A trusted-LAN operator may explicitly opt into plaintext HTTP with `IDENTITY_CONFIRMATION_ALLOW_INSECURE_HTTP=true`; this must emit a prominent startup warning and must not weaken challenge TTL, Origin, generation, or single-use validation. Plaintext confirmation remains vulnerable to an on-path attacker.
 - A loopback confirmation origin is allowed only when the MCP adapter and browser are on the same trusted machine.
 - Apply `SameSite=Strict`, short expiry, CSP, origin checks, CSRF tokens, and no-store cache headers.
 - Popup blocking must not cause automatic approval. The adapter may show a trusted “Open confirmation page” control.

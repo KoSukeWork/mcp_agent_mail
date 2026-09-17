@@ -67,6 +67,22 @@ def test_cli_serve_http_uses_settings(isolated_env, monkeypatch):
     assert call_args["port"] == 8765
 
 
+def test_cli_serve_http_warns_for_explicit_insecure_identity_confirmation(
+    isolated_env,
+    monkeypatch,
+):
+    monkeypatch.setenv("IDENTITY_CONFIRMATION_BASE_URL", "http://agent-mail.lan:8765")
+    monkeypatch.setenv("IDENTITY_CONFIRMATION_ALLOW_INSECURE_HTTP", "true")
+    clear_settings_cache()
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(app, ["serve-http"])
+
+    assert result.exit_code == 0
+    assert "SECURITY WARNING" in result.output
+    assert "http://agent-mail.lan:8765" in result.output
+
+
 def test_cli_config_set_port_clears_cached_settings(tmp_path, monkeypatch):
     runner = CliRunner()
     env_path = tmp_path / ".env"

@@ -155,6 +155,39 @@ def test_identity_confirmation_base_url_rejects_unsafe_values(isolated_env, monk
         get_settings()
 
 
+def test_identity_confirmation_base_url_allows_explicit_insecure_http(isolated_env, monkeypatch):
+    monkeypatch.setenv("IDENTITY_CONFIRMATION_BASE_URL", "http://agent-mail.lan:8765")
+    monkeypatch.setenv("IDENTITY_CONFIRMATION_ALLOW_INSECURE_HTTP", "true")
+    clear_settings_cache()
+
+    settings = get_settings()
+
+    assert settings.identity_confirmation_allow_insecure_http is True
+    assert settings.identity_confirmation_base_url == "http://agent-mail.lan:8765"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "ftp://agent-mail.lan",
+        "http://user:password@agent-mail.lan",
+        "http://agent-mail.lan?challenge=wrong-place",
+        "http://agent-mail.lan/#challenge=wrong-place",
+    ],
+)
+def test_identity_confirmation_insecure_opt_in_keeps_url_guards(
+    isolated_env,
+    monkeypatch,
+    base_url,
+):
+    monkeypatch.setenv("IDENTITY_CONFIRMATION_BASE_URL", base_url)
+    monkeypatch.setenv("IDENTITY_CONFIRMATION_ALLOW_INSECURE_HTTP", "true")
+    clear_settings_cache()
+
+    with pytest.raises(ValueError, match="Invalid IDENTITY_CONFIRMATION_BASE_URL"):
+        get_settings()
+
+
 @pytest.mark.asyncio
 async def test_client_principal_enrollment_hashes_credentials(isolated_env):
     identity = credentials()

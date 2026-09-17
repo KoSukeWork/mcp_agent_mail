@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Iterable, List, Optional, Sequence, cast
+from urllib.parse import urlsplit
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
 
 import click
@@ -31,6 +32,7 @@ import typer
 import uvicorn
 from filelock import BaseFileLock, FileLock, Timeout as LockTimeout
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from sqlalchemy import (
     and_,
@@ -1125,6 +1127,19 @@ def serve_http(
 ) -> None:
     """Run the MCP server over the Streamable HTTP transport."""
     settings = get_settings()
+
+    if (
+        settings.identity_browser_confirmation_enabled
+        and settings.identity_confirmation_allow_insecure_http
+        and settings.identity_confirmation_base_url.startswith("http://")
+        and urlsplit(settings.identity_confirmation_base_url).hostname
+        not in {"localhost", "127.0.0.1", "::1"}
+    ):
+        console.print(
+            "[bold yellow]SECURITY WARNING:[/] Browser identity confirmations are using plaintext HTTP at "
+            f"[bold]{escape(settings.identity_confirmation_base_url)}[/]. Confirmation challenges and actions can be "
+            "intercepted or modified by anyone able to observe that network path."
+        )
 
     # Enforce single-server ownership of the storage root (issue #123)
     _server_lock = _acquire_server_lock(settings)

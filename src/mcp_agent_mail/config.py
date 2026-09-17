@@ -291,6 +291,7 @@ class Settings:
     window_identity_ttl_days: int
     # Browser confirmation fallback for clients without native MCP elicitation UI.
     identity_browser_confirmation_enabled: bool
+    identity_confirmation_allow_insecure_http: bool
     identity_confirmation_base_url: str
     identity_confirmation_ttl_seconds: int
     identity_admin_principal_credential_hashes: list[str]
@@ -381,21 +382,27 @@ def _enum(value: str, *, default: str, allowed: frozenset[str], key: str) -> str
     )
 
 
-def _identity_confirmation_url(value: str) -> str:
+def _identity_confirmation_url(value: str, *, allow_insecure_http: bool = False) -> str:
     """Validate the browser-confirmation origin before any challenge URL is issued."""
     normalized = value.strip().rstrip("/")
     parsed = urlsplit(normalized)
     loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    permitted_transport = (
+        parsed.scheme == "https"
+        or (parsed.scheme == "http" and (loopback or allow_insecure_http))
+    )
     if (
         not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
-        or (parsed.scheme != "https" and not (parsed.scheme == "http" and loopback))
+        or not permitted_transport
     ):
         raise ValueError(
-            "Invalid IDENTITY_CONFIRMATION_BASE_URL: use HTTPS or loopback HTTP without credentials, query, or fragment."
+            "Invalid IDENTITY_CONFIRMATION_BASE_URL: use HTTPS or loopback HTTP without credentials, query, or "
+            "fragment. To explicitly accept interception risk on trusted networks, set "
+            "IDENTITY_CONFIRMATION_ALLOW_INSECURE_HTTP=true."
         )
     return normalized
 
@@ -690,6 +697,18 @@ def _build_settings() -> Settings:
             key="AGENT_NAME_ENFORCEMENT_MODE",
         )
 
+    identity_confirmation_allow_insecure_http = _b(
+        "IDENTITY_CONFIRMATION_ALLOW_INSECURE_HTTP",
+        default=False,
+    )
+    identity_confirmation_base_url = _identity_confirmation_url(
+        decouple_config(
+            "IDENTITY_CONFIRMATION_BASE_URL",
+            default=f"http://127.0.0.1:{http_settings.port}",
+        ),
+        allow_insecure_http=identity_confirmation_allow_insecure_http,
+    )
+
     return Settings(
         environment=environment,
         # Gate: allow either legacy WORKTREES_ENABLED or new GIT_IDENTITY_ENABLED to enable features
@@ -761,12 +780,8 @@ def _build_settings() -> Settings:
         window_identity_uuid=decouple_config("MCP_AGENT_MAIL_WINDOW_ID", default="").strip(),
         window_identity_ttl_days=_i("MCP_AGENT_MAIL_WINDOW_TTL_DAYS", default=30),
         identity_browser_confirmation_enabled=_b("IDENTITY_BROWSER_CONFIRMATION_ENABLED", default=True),
-        identity_confirmation_base_url=_identity_confirmation_url(
-            decouple_config(
-                "IDENTITY_CONFIRMATION_BASE_URL",
-                default=f"http://127.0.0.1:{http_settings.port}",
-            )
-        ),
+        identity_confirmation_allow_insecure_http=identity_confirmation_allow_insecure_http,
+        identity_confirmation_base_url=identity_confirmation_base_url,
         identity_confirmation_ttl_seconds=_i("IDENTITY_CONFIRMATION_TTL_SECONDS", default=300),
         identity_admin_principal_credential_hashes=_csv(
             "IDENTITY_ADMIN_PRINCIPAL_CREDENTIAL_HASHES",
