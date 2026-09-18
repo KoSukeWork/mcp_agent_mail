@@ -67,6 +67,10 @@ openssl rand -hex 32
 # MCP 客户端使用的 Bearer Token；使用第一条随机值
 HTTP_BEARER_TOKEN=替换为随机值
 
+# 私有、单操作者实例需要创建项目、注册 Agent 和发送消息，因此授予写角色
+HTTP_RBAC_ENABLED=true
+HTTP_RBAC_DEFAULT_ROLE=writer
+
 # 网页登录账号与密码
 MAIL_UI_USERNAME=operator
 MAIL_UI_PASSWORD=替换为至少12位的强密码
@@ -74,6 +78,11 @@ MAIL_UI_PASSWORD=替换为至少12位的强密码
 # 网页 Cookie 会话密钥；使用第二条随机值，至少32个字符
 MAIL_UI_SESSION_SECRET=替换为随机值
 ```
+
+静态 `HTTP_BEARER_TOKEN` 本身不携带角色。JWT 未启用时，服务端使用
+`HTTP_RBAC_DEFAULT_ROLE`；默认的 `reader` 只能调用只读工具，创建项目、注册 Agent、
+发送消息等操作会返回 `403 Forbidden`。上述 `writer` 配置适合只有可信使用者的私人实例；
+多人或不同权限的客户端共用服务时，应改用带角色声明的 JWT。
 
 不要把 `.env`、密码或 Token 提交到 Git，也不要把它们发到聊天或日志中。
 
@@ -277,6 +286,15 @@ docker compose -f docker-compose.yaml logs -f agent-mail
 docker compose -f docker-compose.yaml restart agent-mail
 ```
 
+修改 `.env` 后不能只运行 `restart`，需要重新创建容器以加载新的环境变量：
+
+```bash
+docker compose -f docker-compose.yaml up -d --force-recreate
+docker compose -f docker-compose.yaml exec agent-mail printenv HTTP_RBAC_DEFAULT_ROLE
+```
+
+私人实例的第二条命令应输出 `writer`。
+
 检查镜像包 SHA-256：
 
 ```bash
@@ -287,6 +305,7 @@ sha256sum mcp-agent-mail-arm64.tar
 
 - `/mail` 跳转到登录页是正常行为，使用 `MAIL_UI_USERNAME` 和 `MAIL_UI_PASSWORD` 登录。
 - MCP 返回 `401 Unauthorized` 时，检查客户端 `AGENT_MAIL_TOKEN` 是否与服务端 `HTTP_BEARER_TOKEN` 完全一致。
+- MCP 读取正常但创建项目、注册 Agent 或发送消息返回 `403 Forbidden` 时，确认 `.env` 中设置了 `HTTP_RBAC_DEFAULT_ROLE=writer`，然后使用 `up -d --force-recreate` 重新创建容器。
 - 网页能开但 MCP 不通时，确认客户端地址包含 `/api/`，并检查反向代理是否关闭缓冲、放宽长连接超时。
 - 域名访问异常时，先直接测试 `curl http://127.0.0.1:8765/health/liveness`。本机正常通常表示问题在反向代理、DNS、防火墙或证书配置。
 - 容器反复重启时，先运行 `docker compose -f docker-compose.yaml logs --tail=200 agent-mail` 查看实际错误。
