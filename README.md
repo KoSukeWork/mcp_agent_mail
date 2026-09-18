@@ -150,6 +150,41 @@ scripts/run_server_with_token.sh
 uv run python -m mcp_agent_mail.cli config set-port 9000
 ```
 
+## Reusable Agent Mail Workflow Skill
+
+The repository-managed source for the focused coordination workflow is
+[`skills/agent-mail-workflow/SKILL.md`](skills/agent-mail-workflow/SKILL.md).
+It teaches an agent how to select among any number of Agent Mail MCP services,
+keep identities and credentials scoped to the correct service, reserve files,
+read threads, and send complete handoffs. It does not assume a particular
+shared/private topology.
+
+The root [`SKILL.md`](SKILL.md) remains the broad product capability reference;
+the workflow skill is the smaller operational skill intended for routine agent
+coordination.
+
+To install the workflow skill for Codex, copy the repository directory to
+`$CODEX_HOME/skills` (or `~/.codex/skills` when `CODEX_HOME` is unset), then
+start a new task so the skill catalog reloads. Treat the repository copy as the
+source of truth and review any local customizations before replacing an
+existing installed copy.
+
+Linux/macOS:
+
+```bash
+skill_root="${CODEX_HOME:-$HOME/.codex}/skills/agent-mail-workflow"
+mkdir -p "$skill_root"
+cp skills/agent-mail-workflow/SKILL.md "$skill_root/SKILL.md"
+```
+
+Windows PowerShell:
+
+```powershell
+$skillRoot = Join-Path $env:USERPROFILE ".codex\skills\agent-mail-workflow"
+New-Item -ItemType Directory -Force -Path $skillRoot | Out-Null
+Copy-Item -LiteralPath ".\skills\agent-mail-workflow\SKILL.md" -Destination "$skillRoot\SKILL.md"
+```
+
 ## Ready-Made Blurb to Add to Your AGENTS.md or CLAUDE.md Files:
 <!-- BEGIN_AGENT_MAIL_SNIPPET -->
 ```
