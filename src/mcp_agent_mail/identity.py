@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from .config import get_settings
@@ -165,9 +166,21 @@ async def authenticate_client_principal(
                 last_authenticated_at=now,
             )
             session.add(principal)
-            await session.commit()
-            await session.refresh(principal)
-            return principal
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                result = await session.execute(
+                    select(McpClientPrincipal).where(
+                        func.lower(McpClientPrincipal.client_uid) == credentials.client_uid.lower()
+                    )
+                )
+                principal = result.scalars().first()
+                if principal is None:
+                    raise
+            else:
+                await session.refresh(principal)
+                return principal
         if principal.status != "active":
             raise ConversationIdentityError(
                 "CLIENT_PRINCIPAL_REVOKED",

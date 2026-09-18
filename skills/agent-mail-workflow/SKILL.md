@@ -34,7 +34,7 @@ Before `ensure_project`, `macro_start_session`, registration, reservation, or me
 A task may intentionally use zero, one, or several servers. For every operation, keep its complete scope together:
 
 ```text
-server namespace + project key + agent identity + registration token + message/thread ID
+server namespace + project key + agent identity + credential mode + message/thread ID
 ```
 
 Never take an identity, registration token, message ID, thread ID, contact relationship, or reservation returned by one server and use it against another. Project records are server-local: the same `human_key` on different servers denotes distinct mail projects unless an external system explicitly establishes otherwise.
@@ -68,12 +68,16 @@ Project identity depends on the exact key:
 - When collaborators run on machines with different paths, reuse the canonical project key already agreed by the team. It may be an absolute path-like opaque key that does not exist locally.
 - Never invent a new slug or switch between path spellings for the same project.
 
-Omit `agent_name` unless a stable identity is intentionally being resumed. Resuming an existing identity requires its registration token. Treat registration tokens as secrets: keep them out of repositories, messages, logs, and final responses. If the token is unavailable, register a new identity instead of impersonating the old one.
+When the MCP connection supplies trusted per-conversation identity metadata, omit `agent_name` during normal startup. `macro_start_session` automatically reconnects the current conversation to its existing Agent or creates one only when the conversation is unbound; no registration token is returned to the model. An `agent_name` on a newly bound conversation is only a first-creation choice.
+
+For a one-time migration of an Agent created by a legacy connection, pass both its `agent_name` and its registration token to `macro_start_session` over the trusted connection. After migration, omit both on later tasks. Treat registration tokens as secrets: keep them out of repositories, messages, logs, and final responses. If the legacy token is unavailable, create a new identity or use the explicit administrator recovery workflow instead of impersonating the old one.
+
+Clients without trusted per-conversation metadata remain on the legacy path. They must keep and present the registration token when resuming a named Agent.
 
 If `macro_start_session` is unavailable, use this granular fallback:
 
 1. `ensure_project(human_key=<shared project key>)`.
-2. `register_agent(project_key=<same key>, program=<client>, model=<model>, task_description=<task>)`.
+2. With trusted metadata, call `ensure_agent_identity(project_key=<same key>, program=<client>, model=<model>, task_description=<task>)`; otherwise call `register_agent(...)` and retain its legacy registration token outside model-visible context.
 3. Reserve planned edit paths when the task writes files.
 4. Fetch the inbox with message bodies.
 

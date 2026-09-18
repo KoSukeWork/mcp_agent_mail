@@ -1224,6 +1224,45 @@ def serve_stdio() -> None:
         _server_lock.release()
 
 
+@app.command("codex-adapter")
+def codex_adapter(
+    env_file: Annotated[
+        Path,
+        typer.Option(
+            "--env-file",
+            help="Env file containing MCP_AGENT_MAIL_URL and MCP_AGENT_MAIL_BEARER_TOKEN.",
+        ),
+    ] = Path(".env"),
+    url: Annotated[
+        Optional[str],
+        typer.Option(
+            "--url",
+            help="Override MCP_AGENT_MAIL_URL while continuing to read the bearer token from the env file.",
+        ),
+    ] = None,
+    bearer_token_env_var: Annotated[
+        Optional[str],
+        typer.Option(
+            "--bearer-token-env-var",
+            help="Read the bearer token from this forwarded process environment variable instead of the env file key.",
+        ),
+    ] = None,
+) -> None:
+    """Proxy Codex STDIO MCP calls to Agent Mail with trusted task identity."""
+    from .codex_adapter import CodexAdapterError, load_adapter_settings, run_codex_adapter
+
+    try:
+        adapter_settings = load_adapter_settings(
+            env_file,
+            upstream_url=url,
+            bearer_token_env_var=bearer_token_env_var,
+        )
+        run_codex_adapter(adapter_settings)
+    except (CodexAdapterError, OSError) as exc:
+        Console(stderr=True).print(f"[bold red]Codex adapter failed:[/] {escape(str(exc))}")
+        raise typer.Exit(code=2) from exc
+
+
 def _run_command(command: list[str]) -> None:
     console.print(f"[cyan]$ {' '.join(command)}[/]")
     result = subprocess.run(command, check=False)

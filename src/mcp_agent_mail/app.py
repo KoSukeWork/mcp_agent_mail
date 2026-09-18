@@ -10352,6 +10352,113 @@ def build_mcp_server() -> FastMCP:
                     pass
             raise
 
+    async def _prepare_trusted_macro_agent(
+        ctx: Context,
+        project: Project,
+        credentials: ClientConversationCredentials,
+        *,
+        program: str,
+        model: str,
+        task_description: str,
+        agent_name: str | None,
+        registration_token: str | None,
+        settings: Settings,
+    ) -> tuple[Agent, str, int]:
+        """Create, reconnect, or migrate the trusted Agent used by workflow macros."""
+        try:
+            resolved_identity = await resolve_conversation_identity(project, credentials)
+        except ConversationIdentityError as exc:
+            if exc.error_type != "UNTRUSTED_CONVERSATION_CONTEXT":
+                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            resolved_identity = None
+
+        if resolved_identity is not None:
+            if agent_name and agent_name.casefold() != resolved_identity.agent.name.casefold():
+                raise ToolExecutionError(
+                    "IDENTITY_BINDING_CONFLICT",
+                    "This trusted conversation is already bound to a different Agent identity.",
+                    recoverable=True,
+                    data={
+                        "bound_agent_name": resolved_identity.agent.name,
+                        "requested_agent_name": agent_name,
+                        "project_key": project.human_key,
+                    },
+                )
+            agent = await _get_or_create_agent(
+                project,
+                resolved_identity.agent.name,
+                program,
+                model,
+                task_description,
+                settings,
+            )
+            _activate_identity_write_fence(credentials, resolved_identity)
+            _bind_session_agent(ctx, project, agent)
+            return agent, "reconnected", resolved_identity.binding.generation
+
+        existing_agent = await _find_agent_optional(project, agent_name)
+        if existing_agent is not None:
+            if not _agent_registration_token_matches(existing_agent, registration_token):
+                raise ToolExecutionError(
+                    "AUTHENTICATION_REQUIRED",
+                    "A valid existing registration_token is required for the one-time trusted identity migration.",
+                    recoverable=True,
+                    data={"agent_name": existing_agent.name, "project_key": project.human_key},
+                )
+            agent = await _get_or_create_agent(
+                project,
+                existing_agent.name,
+                program,
+                model,
+                task_description,
+                settings,
+            )
+            try:
+                resolved_identity = await bind_conversation_identity(
+                    project,
+                    agent,
+                    credentials,
+                    allow_client_enrollment=True,
+                )
+            except ConversationIdentityError as exc:
+                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            _activate_identity_write_fence(credentials, resolved_identity)
+            agent = await _migrate_agent_registration_token(agent)
+            _bind_session_agent(ctx, project, agent)
+            return agent, "migrated", resolved_identity.binding.generation
+
+        unique_name = await _generate_unique_agent_name(project, settings, agent_name)
+        try:
+            resolved_identity = await create_bound_agent_identity(
+                project,
+                credentials,
+                name=unique_name,
+                program=program,
+                model=model,
+                task_description=task_description,
+                attachments_policy="auto",
+            )
+            identity_action = "created"
+        except ConversationIdentityError as exc:
+            if exc.error_type != "IDENTITY_BINDING_CONFLICT":
+                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            try:
+                resolved_identity = await resolve_conversation_identity(project, credentials)
+            except ConversationIdentityError as resolve_exc:
+                raise ToolExecutionError(
+                    resolve_exc.error_type,
+                    str(resolve_exc),
+                    recoverable=True,
+                    data=resolve_exc.data,
+                ) from resolve_exc
+            if resolved_identity is None:
+                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+            identity_action = "reconnected"
+        _activate_identity_write_fence(credentials, resolved_identity)
+        agent = resolved_identity.agent
+        _bind_session_agent(ctx, project, agent)
+        return agent, identity_action, resolved_identity.binding.generation
+
     @mcp.tool(name="macro_start_session")
     @_instrument_tool(
         "macro_start_session",
@@ -10381,20 +10488,37 @@ def build_mcp_server() -> FastMCP:
         _validate_program_model(program, model)
         settings = get_settings()
         project = await _ensure_project(human_key)
-        if agent_name:
-            existing_agent = await _find_agent_optional(project, agent_name)
-            if existing_agent is not None:
-                await _authenticate_agent(
-                    ctx,
-                    project,
-                    existing_agent.name,
-                    registration_token,
-                    token_param="registration_token",
-                    action="macro_start_session for an existing identity",
-                )
-        agent = await _get_or_create_agent(project, agent_name, program, model, task_description, settings)
-        agent, token = await _ensure_agent_registration_token(agent)
-        _bind_session_agent(ctx, project, agent)
+        credentials = _conversation_credentials(ctx)
+        identity_action: str | None = None
+        binding_generation: int | None = None
+        token: str | None = None
+        if credentials is None:
+            if agent_name:
+                existing_agent = await _find_agent_optional(project, agent_name)
+                if existing_agent is not None:
+                    await _authenticate_agent(
+                        ctx,
+                        project,
+                        existing_agent.name,
+                        registration_token,
+                        token_param="registration_token",
+                        action="macro_start_session for an existing identity",
+                    )
+            agent = await _get_or_create_agent(project, agent_name, program, model, task_description, settings)
+            agent, token = await _ensure_agent_registration_token(agent)
+            _bind_session_agent(ctx, project, agent)
+        else:
+            agent, identity_action, binding_generation = await _prepare_trusted_macro_agent(
+                ctx,
+                project,
+                credentials,
+                program=program,
+                model=model,
+                task_description=task_description,
+                agent_name=agent_name,
+                registration_token=registration_token,
+                settings=settings,
+            )
 
         file_reservations_result: Optional[dict[str, Any]] = None
         if file_reservation_paths is not None:
@@ -10429,13 +10553,26 @@ def build_mcp_server() -> FastMCP:
             f"macro_start_session prepared agent '{agent.name}' on project '{project.human_key}' "
             f"(file_reservations={len(file_reservations_result['granted']) if file_reservations_result else 0})."
         )
-        return {
+        agent_payload = _agent_to_dict(agent)
+        if credentials is not None:
+            agent_payload.update(
+                {
+                    "credential_managed_by_mcp": True,
+                    "binding_generation": binding_generation,
+                    "identity_action": identity_action,
+                }
+            )
+        result = {
             "project": _project_to_dict(project),
-            "agent": _agent_to_dict(agent),
-            "registration_token": token,
+            "agent": agent_payload,
             "file_reservations": file_reservations_result or {"granted": [], "conflicts": []},
             "inbox": inbox_items,
         }
+        if credentials is None:
+            result["registration_token"] = token
+        else:
+            result["registration_token_returned"] = False
+        return result
 
     @mcp.tool(name="macro_prepare_thread")
     @_instrument_tool(
@@ -10468,33 +10605,81 @@ def build_mcp_server() -> FastMCP:
         """
         settings = get_settings()
         project = await _get_project_by_identifier(project_key)
+        credentials = _conversation_credentials(ctx)
+        identity_action: str | None = None
+        binding_generation: int | None = None
+        token: str | None = None
         if register_if_missing:
             _validate_program_model(program, model)
-            if agent_name:
-                existing_agent = await _find_agent_optional(project, agent_name)
-                if existing_agent is not None:
-                    await _authenticate_agent(
-                        ctx,
-                        project,
-                        existing_agent.name,
-                        registration_token,
-                        token_param="registration_token",
-                        action="macro_prepare_thread for an existing identity",
-                    )
-            agent = await _get_or_create_agent(project, agent_name, program, model, task_description, settings)
+            if credentials is not None:
+                agent, identity_action, binding_generation = await _prepare_trusted_macro_agent(
+                    ctx,
+                    project,
+                    credentials,
+                    program=program,
+                    model=model,
+                    task_description=task_description,
+                    agent_name=agent_name,
+                    registration_token=registration_token,
+                    settings=settings,
+                )
+            else:
+                if agent_name:
+                    existing_agent = await _find_agent_optional(project, agent_name)
+                    if existing_agent is not None:
+                        await _authenticate_agent(
+                            ctx,
+                            project,
+                            existing_agent.name,
+                            registration_token,
+                            token_param="registration_token",
+                            action="macro_prepare_thread for an existing identity",
+                        )
+                agent = await _get_or_create_agent(project, agent_name, program, model, task_description, settings)
         else:
-            if not agent_name:
-                raise ValueError("agent_name is required when register_if_missing is False.")
-            agent = await _authenticate_agent(
-                ctx,
-                project,
-                agent_name,
-                registration_token,
-                token_param="registration_token",
-                action="macro_prepare_thread",
-            )
-        agent, token = await _ensure_agent_registration_token(agent)
-        _bind_session_agent(ctx, project, agent)
+            if credentials is not None:
+                try:
+                    resolved_identity = await resolve_conversation_identity(project, credentials)
+                except ConversationIdentityError as exc:
+                    raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
+                if resolved_identity is None:
+                    raise ToolExecutionError(
+                        "IDENTITY_NOT_BOUND",
+                        "This trusted conversation has no Agent identity in the mailbox; "
+                        "set register_if_missing to true or call ensure_agent_identity first.",
+                        recoverable=True,
+                        data={"project_key": project.human_key},
+                    )
+                if agent_name and agent_name.casefold() != resolved_identity.agent.name.casefold():
+                    raise ToolExecutionError(
+                        "IDENTITY_BINDING_CONFLICT",
+                        "This trusted conversation is bound to a different Agent identity.",
+                        recoverable=True,
+                        data={
+                            "bound_agent_name": resolved_identity.agent.name,
+                            "requested_agent_name": agent_name,
+                            "project_key": project.human_key,
+                        },
+                    )
+                agent = resolved_identity.agent
+                binding_generation = resolved_identity.binding.generation
+                identity_action = "reconnected"
+                _activate_identity_write_fence(credentials, resolved_identity)
+                _bind_session_agent(ctx, project, agent)
+            else:
+                if not agent_name:
+                    raise ValueError("agent_name is required when register_if_missing is False.")
+                agent = await _authenticate_agent(
+                    ctx,
+                    project,
+                    agent_name,
+                    registration_token,
+                    token_param="registration_token",
+                    action="macro_prepare_thread",
+                )
+        if credentials is None:
+            agent, token = await _ensure_agent_registration_token(agent)
+            _bind_session_agent(ctx, project, agent)
 
         inbox_items = await _list_inbox(
             project,
@@ -10516,13 +10701,26 @@ def build_mcp_server() -> FastMCP:
             f"macro_prepare_thread prepared agent '{agent.name}' for thread '{thread_id}' "
             f"on project '{project.human_key}' (messages={total_messages})."
         )
-        return {
+        agent_payload = _agent_to_dict(agent)
+        if credentials is not None:
+            agent_payload.update(
+                {
+                    "credential_managed_by_mcp": True,
+                    "binding_generation": binding_generation,
+                    "identity_action": identity_action or "reconnected",
+                }
+            )
+        result = {
             "project": _project_to_dict(project),
-            "agent": _agent_to_dict(agent),
-            "registration_token": token,
+            "agent": agent_payload,
             "thread": {"thread_id": thread_id, "summary": summary, "examples": examples, "total_messages": total_messages},
             "inbox": inbox_items,
         }
+        if credentials is None:
+            result["registration_token"] = token
+        else:
+            result["registration_token_returned"] = False
+        return result
 
     @mcp.tool(name="macro_file_reservation_cycle")
     @_instrument_tool(

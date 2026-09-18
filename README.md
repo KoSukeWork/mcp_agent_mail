@@ -224,8 +224,10 @@ Common pitfalls
 
 ### Persistent MCP conversation identity
 
-- A supported adapter authenticates one stable MCP client principal and injects the current Pi session UUID as trusted request metadata. Agent names remain display labels, never authentication factors.
+- A supported adapter authenticates one stable MCP client principal and injects the current host conversation ID as trusted request metadata. Agent names remain display labels, never authentication factors.
+- Codex can use the repository's local STDIO adapter in front of any remote Agent Mail HTTP service. See [`docs/CODEX_ADAPTER.md`](docs/CODEX_ADAPTER.md) for reusable Windows, Linux, multi-service, and legacy-Agent migration instructions.
 - `ensure_agent_identity` creates an Agent only for an unbound conversation and reconnects the same conversation to the same Agent after transport restarts.
+- `macro_start_session` follows the same trusted binding path when metadata is present; registration tokens remain only as a legacy fallback and one-time migration credential.
 - A different conversation must use `request_agent_identity_transfer`; approval uses native MCP elicitation when available or a short-lived local browser confirmation. Approval increments the Agent binding generation and immediately fences the previous conversation.
 - Browser identity confirmation requires HTTPS for non-loopback origins by default. Trusted-LAN deployments may explicitly set `IDENTITY_CONFIRMATION_ALLOW_INSECURE_HTTP=true` with an `http://` base URL; startup emits a security warning because an on-path peer can intercept or alter confirmation challenges. This opt-in does not weaken URL credential, query, fragment, TTL, Origin, generation, or single-use checks.
 - Local administrators can inspect and authorize existing principals with `mcp-agent-mail identity list-clients`, `identity grant-admin <client_uid>`, `identity revoke-admin <client_uid>`, and `identity revoke-client <client_uid>`.
