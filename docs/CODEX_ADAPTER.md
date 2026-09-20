@@ -92,14 +92,32 @@ Restart/reload the MCP configuration and test in a Codex task. The [official Ope
 
 ### 给 AI 的安装配置提示词
 
+填写下方占位符后交给 AI。服务地址、Token 和客户端备注均未包含真实部署信息；如需其他服务，修改 MCP 名称和 profile 即可。
+
 ```text
-请配置 Codex 的 Agent Mail MCP，保留其他配置，不打印 Token。
-MCP 名称：<名称>；Profile：<profile>；服务 URL：<完整 /api/ 地址>；Token：<填写>。
-确认 Node >=22.13，用 npm install -g 安装：
-https://github.com/KoSukeWork/mcp_agent_mail/archive/refs/heads/main.tar.gz
-将 url、token 写入 ~/.config/mcp-agent-mail/<profile>.toml；对应 MCP 使用
-command="agent-mail-adapter"、args=["--profile","<profile>"]，启用并设置启动/工具超时为30/150秒。
-替换同一服务的旧配置，执行 agent-mail-adapter --profile <profile> --check 验证，提醒重启 Codex。
+请配置 Codex 的公司 Agent Mail MCP，保留其他配置，不输出 Token。
+
+1. 检查 Node.js ≥22.13，然后安装：
+npm install -g https://github.com/KoSukeWork/mcp_agent_mail/archive/5fee9d098a835c6d5272ff8d4e5cac7f78dc4a0f.tar.gz
+
+2. 从上述同一版本仓库安装 skills/agent-mail-workflow 到 Codex 用户技能目录，保留其他 skill。
+
+3. 创建或更新 ~/.config/mcp-agent-mail/company.toml：
+url = "<填写完整 MCP 服务地址，含 http(s):// 和 /api/>"
+token = "<填写 Token>"
+client_label = "<姓名·电脑用途>"
+
+4. 将 Codex 的 company_agent_mail 配置改为：
+[mcp_servers.company_agent_mail]
+command = "agent-mail-adapter"
+args = ["--profile", "company"]
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 150
+
+移除该项旧 HTTP 配置，不改其他 MCP，不配置 CODEX_THREAD_ID。
+
+执行 agent-mail-adapter --profile company --check，验证适配器版本至少为 0.1.2、skill 已安装，提醒我彻底退出再打开 Codex。重启后通过 MCP 查询身份验证连接，不擅自创建或接管 Agent。
 ```
 
 ### Maintainer verification and packing
