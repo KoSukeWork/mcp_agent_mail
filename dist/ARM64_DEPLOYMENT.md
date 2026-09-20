@@ -310,7 +310,32 @@ sha256sum mcp-agent-mail-arm64.tar
 - 域名访问异常时，先直接测试 `curl http://127.0.0.1:8765/health/liveness`。本机正常通常表示问题在反向代理、DNS、防火墙或证书配置。
 - 容器反复重启时，先运行 `docker compose -f docker-compose.yaml logs --tail=200 agent-mail` 查看实际错误。
 
-## 8. 当前部署约定摘要
+## 8. 网页管理员与身份恢复
+
+升级到包含网页身份管理的版本后，用现有网页管理员账号登录 `/mail`，点击顶部的“身份管理”，或直接打开 `/mail/admin/identity`。
+
+日常管理均在网页完成，无需登录服务器执行授权命令：
+
+- 审批或拒绝 Agent 恢复 / 接管申请，保留原 Agent 和邮件。
+- 吊销、恢复 MCP 客户端；单独撤销会话绑定。
+- 查看管理操作审计，修改管理员用户名和密码。
+
+恢复流程：目标会话先通过可信适配器调用 `recover_agent_identity`，拿到申请编号；管理员在网页核对编号、项目、Agent 和申请客户端，输入当前管理员密码后批准；目标会话再检查 `identity_confirmation_status` 并调用 `macro_start_session`。客户端名称是自报信息，应与申请人核对，不能仅凭名称批准。
+
+批准恢复后旧会话立即失去控制权。恢复一个已吊销客户端只恢复其认证资格，不会重新激活旧绑定；需要另外申请 Agent 恢复。过期申请需重新提交。
+
+首次登录继续使用 `.env` 中的 `MAIL_UI_USERNAME` / `MAIL_UI_PASSWORD`。在网页修改账号后，数据库中保存的账号和密码哈希优先于这两个初始化变量；保留数据卷即可跨容器升级使用。`MAIL_UI_SESSION_SECRET` 仍需配置。修改账号会退出所有网页会话。
+
+只有忘记管理员密码等应急情况才需要 CLI 重置，命令交互式询问新账号和密码：
+
+```bash
+docker compose -f docker-compose.yaml exec agent-mail \
+  /app/.venv/bin/mcp-agent-mail identity reset-web-admin
+```
+
+拿到带版本号的新镜像包时，`docker load -i` 使用该包的实际文件名即可；内部标签仍为 `mcp-agent-mail:arm64`，Compose 无需修改。加载后执行 `docker compose -f docker-compose.yaml up -d --force-recreate`，不要删除数据卷。
+
+## 9. 当前部署约定摘要
 
 | 项目 | 固定值 |
 |---|---|
