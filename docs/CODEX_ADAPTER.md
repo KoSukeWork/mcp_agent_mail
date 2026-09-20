@@ -6,7 +6,9 @@ The Codex adapter is a local STDIO MCP server that proxies to a remote Agent Mai
 Codex task -> local STDIO adapter -> remote Agent Mail HTTP MCP
 ```
 
-The remote HTTP bearer token still authenticates the connection. It does not identify a Codex task. The adapter separately uses Codex's stable `CODEX_THREAD_ID` as the conversation identity and keeps a high-entropy client credential in the operating-system credential manager.
+The remote HTTP bearer token still authenticates the connection. It does not identify a Codex task. Adapter 0.1.1 uses Codex's per-request `params._meta.threadId` as the conversation identity and keeps a high-entropy client credential in the operating-system credential manager. A runtime `CODEX_THREAD_ID`, when actually supplied by the host, is also accepted; it is not required at startup. Conflicting IDs fail closed.
+
+Codex can launch/reuse an MCP process without a thread environment. Initialization and tool discovery therefore work before any task ID exists. Each tool call resolves its own host metadata: no last-seen thread is cached, and neither `sessionId` nor model-controlled tool arguments substitute for `threadId`. Calls without either trusted source are rejected locally without forwarding. This matches Codex's [`with_mcp_tool_call_ids_meta`](https://github.com/openai/codex/blob/main/codex-rs/core/src/mcp_tool_call.rs) implementation. The boundary trusts the local Codex host owning STDIO, not arbitrary remote metadata.
 
 ## 1. Install the npm adapter / 安装
 
@@ -17,22 +19,22 @@ Package name: `@kosukework/agent-mail-adapter`, executable: `agent-mail-adapter`
 Install the versioned `.tgz` produced by `npm pack`:
 
 ```bash
-npm install -g ./kosukework-agent-mail-adapter-0.1.0.tgz
+npm install -g ./kosukework-agent-mail-adapter-0.1.1.tgz
 agent-mail-adapter --version
 ```
 
-Alternatively, npm can install this reviewed repository archive directly (no manual clone or chosen installation directory):
+Alternatively, npm can install the repository archive directly (no manual clone or chosen installation directory):
 
 ```bash
-npm install -g https://github.com/KoSukeWork/mcp_agent_mail/archive/ddc2d4bb4ff403251d302b48709fc242293546c4.tar.gz
+npm install -g https://github.com/KoSukeWork/mcp_agent_mail/archive/refs/heads/main.tar.gz
 ```
 
-For future company updates, use the next reviewed full commit SHA, or host the packed `.tgz` at your company artifact URL. npm manages the installed program location. Do not run npm as administrator/root merely to work around a misconfigured npm prefix.
+For reproducible company distribution, replace `refs/heads/main` with a reviewed full commit SHA containing adapter 0.1.1 or newer, or host the packed `.tgz` at your company artifact URL. The former `ddc2d4b` archive contains the broken 0.1.0 startup assumption. npm manages the installed program location. Do not run npm as administrator/root merely to work around a misconfigured npm prefix.
 
 After a maintainer publishes an approved version, registry installation becomes:
 
 ```bash
-npm install -g @kosukework/agent-mail-adapter@0.1.0
+npm install -g @kosukework/agent-mail-adapter@0.1.1
 ```
 
 ## 2. Configure a profile and Codex / 配置
@@ -48,7 +50,7 @@ request_timeout_seconds = 120
 
 Only `url` is mandatory. Keep the file outside repositories; on Unix use mode 600. This file contains the service Bearer Token, not the adapter's generated client secret. It is parsed directly as TOML; it does not require Windows environment-variable setup. It does **not** load a repository `.env` or inherit another service's token implicitly.
 
-If explicitly desired, replace `token` with `token_env = "EXISTING_TOKEN_VARIABLE"` and forward that variable using the MCP entry's `env_vars`. Using both fields, missing explicit variables, unknown fields, or a configured conversation ID is rejected. `CODEX_THREAD_ID` comes only from the Codex process environment, never this file or a CLI argument.
+If explicitly desired, replace `token` with `token_env = "EXISTING_TOKEN_VARIABLE"` and forward that variable using the MCP entry's `env_vars`. Using both fields, missing explicit variables, unknown fields, or a configured conversation ID is rejected. Never put `CODEX_THREAD_ID` into config files or invent `_meta.threadId` in tool arguments; Codex supplies task metadata.
 
 Run a read-only installation/connection diagnostic before registering the MCP:
 
@@ -75,7 +77,7 @@ Once the package has actually been published, the no-global-install alternative 
 ```toml
 [mcp_servers.company_agent_mail]
 command = "npx"
-args = ["-y", "@kosukework/agent-mail-adapter@0.1.0", "--profile", "company"]
+args = ["-y", "@kosukework/agent-mail-adapter@0.1.1", "--profile", "company"]
 startup_timeout_sec = 60
 tool_timeout_sec = 150
 ```
@@ -94,7 +96,7 @@ Restart/reload the MCP configuration and test in a Codex task. The [official Ope
 请配置 Codex 的 Agent Mail MCP，保留其他配置，不打印 Token。
 MCP 名称：<名称>；Profile：<profile>；服务 URL：<完整 /api/ 地址>；Token：<填写>。
 确认 Node >=22.13，用 npm install -g 安装：
-https://github.com/KoSukeWork/mcp_agent_mail/archive/ddc2d4bb4ff403251d302b48709fc242293546c4.tar.gz
+https://github.com/KoSukeWork/mcp_agent_mail/archive/refs/heads/main.tar.gz
 将 url、token 写入 ~/.config/mcp-agent-mail/<profile>.toml；对应 MCP 使用
 command="agent-mail-adapter"、args=["--profile","<profile>"]，启用并设置启动/工具超时为30/150秒。
 替换同一服务的旧配置，执行 agent-mail-adapter --profile <profile> --check 验证，提醒重启 Codex。
@@ -168,7 +170,8 @@ The command prompts for the new username and password and invalidates old sessio
 
 ## Troubleshooting
 
-- `CODEX_THREAD_ID` error: the adapter was launched outside a Codex task, the Codex host is too old, or the variable was explicitly removed from the child process. Do not hard-code one thread ID for multiple tasks.
+- Startup `Codex must supply CODEX_THREAD_ID` error: update npm adapter 0.1.0 to 0.1.1 or newer and reload MCP. This was an adapter startup bug; editing the server or hard-coding a task ID is not a fix.
+- Missing `_meta.threadId` on a tool call: the host did not supply per-request task metadata or a runtime task ID. Update/check the Codex host. `--check` verifies connectivity only, not host task metadata; verify `identity_status` in an actual Codex task. A rejected call does not kill the adapter.
 - HTTP 401/403: verify `token` (or the explicit `token_env` variable) in the selected TOML profile and the server's RBAC role.
 - `UNTRUSTED_CONVERSATION_CONTEXT`: confirm Codex is connected to the STDIO adapter entry, not the old direct HTTP entry.
 - Credential-store error: the adapter intentionally fails instead of writing its client secret to a model-visible config file. On Windows, ensure Credential Manager is available for the user running Codex.

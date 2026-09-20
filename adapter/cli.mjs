@@ -18,7 +18,7 @@ const ACCOUNT = 'client-principal';
 const OPAQUE_ID = /^[A-Za-z0-9._~-]{16,256}$/;
 const SECRET = /^[A-Za-z0-9_-]{32,256}$/;
 const USER_AGENT = 'OpenAI File Downloader, XaiImageApiFetch/1.0';
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 export class AdapterError extends Error {}
 
@@ -39,7 +39,7 @@ export function credentialService(url) {
   return `mcp-agent-mail/codex-adapter/${createHash('sha256').update(canonicalizeUrl(url)).digest('hex')}`;
 }
 
-export async function loadSettings(file, { env = process.env, requireThread = true } = {}) {
+export async function loadSettings(file, { env = process.env } = {}) {
   let config;
   try {
     const raw = await readFile(file, 'utf8');
@@ -64,8 +64,8 @@ export async function loadSettings(file, { env = process.env, requireThread = tr
   }
   if (typeof token !== 'string' || /[\r\n]/.test(token)) throw new AdapterError('Invalid bearer token.');
   const thread = env.CODEX_THREAD_ID?.trim();
-  if (requireThread && (!thread || !OPAQUE_ID.test(thread))) {
-    throw new AdapterError('Codex must supply CODEX_THREAD_ID at process launch. Do not hard-code a thread ID; --check works outside Codex.');
+  if (thread && !OPAQUE_ID.test(thread)) {
+    throw new AdapterError('Invalid runtime CODEX_THREAD_ID. Do not configure a static conversation ID.');
   }
   if (config.client_label !== undefined && typeof config.client_label !== 'string') {
     throw new AdapterError('client_label must be a string.');
@@ -171,10 +171,24 @@ export function injectIdentity(message, settings, identity) {
   const meta = { ...message.params?._meta };
   // Never trust an identity supplied over STDIO, including initialize metadata.
   delete meta[IDENTITY_META_KEY];
-  if (message.method !== 'initialize') {
+  // Codex launches MCP processes before a task env exists and may reuse them.
+  // Read client-supplied request metadata, never arguments or a cached last ID.
+  const supplied = meta.threadId;
+  const hasSupplied = Object.hasOwn(meta, 'threadId');
+  if (hasSupplied && (typeof supplied !== 'string' || !OPAQUE_ID.test(supplied))) {
+    throw new AdapterError('Invalid Codex request _meta.threadId.');
+  }
+  if (hasSupplied && settings.thread && supplied !== settings.thread) {
+    throw new AdapterError('Codex request threadId conflicts with runtime CODEX_THREAD_ID.');
+  }
+  const thread = hasSupplied ? supplied : settings.thread;
+  if (message.method === 'tools/call' && !thread) {
+    throw new AdapterError('Missing Codex request _meta.threadId. Update the Codex host; do not pass identity in tool arguments or hard-code a task ID.');
+  }
+  if (message.method !== 'initialize' && thread) {
     meta[IDENTITY_META_KEY] = {
       version: 1, client_uid: identity.client_uid, client_secret: identity.client_secret,
-      conversation_uid: settings.thread, client_label: settings.clientLabel, capabilities: [],
+      conversation_uid: thread, client_label: settings.clientLabel, capabilities: [],
     };
   }
   return { ...message, params: { ...message.params, _meta: meta } };
@@ -242,6 +256,12 @@ export async function bridge(settings, identity, {
       if (isRequest) void safeError(message.id, 'Initialize the adapter first.').catch(() => stop());
       return;
     }
+    let upstreamMessage;
+    try { upstreamMessage = injectIdentity(message, settings, identity); }
+    catch (error) {
+      if (isRequest) void safeError(message.id, error instanceof AdapterError ? error.message : 'Invalid request metadata.').catch(() => stop());
+      return;
+    }
     if (isRequest) {
       if (pending.has(message.id)) { void stop(); return; }
       if (pending.size >= 128) { void safeError(message.id, 'Too many pending requests.').catch(() => stop()); return; }
@@ -250,7 +270,7 @@ export async function bridge(settings, identity, {
         void safeError(message.id, 'Upstream request timed out; its outcome may be unknown. Do not blindly repeat writes.').catch(() => stop());
       }, settings.timeout * 1000));
     }
-    void remote.send(injectIdentity(message, settings, identity)).catch(() => {
+    void remote.send(upstreamMessage).catch(() => {
       if (isRequest && pending.has(message.id)) {
         clearTimeout(pending.get(message.id));
         pending.delete(message.id);
@@ -274,7 +294,8 @@ export async function checkConnection(settings) {
     await client.connect(upstreamTransport(settings), { timeout: settings.timeout * 1000 });
     const result = await client.listTools({}, { timeout: settings.timeout * 1000 });
     if (!result.tools.some(tool => tool.name === 'macro_start_session')) throw new Error();
-    return { ok: true, transport: 'stdio-to-streamable-http', credential_store: 'available', identity_enrolled: false };
+    return { ok: true, transport: 'stdio-to-streamable-http', credential_store: 'available', identity_enrolled: false,
+      task_identity: 'Requires Codex tools/call _meta.threadId (or runtime CODEX_THREAD_ID); not verified by --check.' };
   } catch { throw new AdapterError('Connection check failed. Check the exact MCP URL, token and server version.'); }
   finally { await client.close(); }
 }
@@ -295,7 +316,7 @@ export async function main(args = process.argv.slice(2)) {
   if (Boolean(values.config) === Boolean(values.profile)) throw new AdapterError('Choose exactly one of --profile NAME or --config FILE.');
   if (values.profile && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(values.profile)) throw new AdapterError('Invalid profile name.');
   const file = values.config ? resolve(values.config) : join(homedir(), '.config', 'mcp-agent-mail', `${values.profile}.toml`);
-  const settings = await loadSettings(file, { requireThread: !values.check });
+  const settings = await loadSettings(file);
   if (values.check) { process.stdout.write(`${JSON.stringify(await checkConnection(settings))}\n`); return; }
   const identity = await loadIdentity(settings.canonicalUrl);
   const session = await bridge(settings, identity);

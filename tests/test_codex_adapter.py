@@ -336,7 +336,7 @@ async def test_macro_migrates_a_legacy_named_agent_once(isolated_env) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("adapter_runtime", ["python", "node"])
+@pytest.mark.parametrize("adapter_runtime", ["python", "node", "node_metadata"])
 async def test_adapter_propagates_identity_through_streamable_http(
     isolated_env,
     monkeypatch,
@@ -344,7 +344,7 @@ async def test_adapter_propagates_identity_through_streamable_http(
 ) -> None:
     node = shutil.which("node")
     repository = Path(__file__).parents[1]
-    if adapter_runtime == "node" and (node is None or not (repository / "node_modules/@modelcontextprotocol/sdk").is_dir()):
+    if adapter_runtime.startswith("node") and (node is None or not (repository / "node_modules/@modelcontextprotocol/sdk").is_dir()):
         pytest.skip("Node adapter dependencies unavailable; run npm install first.")
     bearer_token = "adapter-http-test-bearer"
     monkeypatch.setenv("HTTP_BEARER_TOKEN", bearer_token)
@@ -374,13 +374,16 @@ async def test_adapter_propagates_identity_through_streamable_http(
         credential_store=MemoryCredentialStore(),
         transport=transport,
     )
-    if adapter_runtime == "node":
+    if adapter_runtime.startswith("node"):
         # Exercise the actual Node STDIO/HTTP bridge with test-only credentials;
         # do not create or touch entries in the developer's OS credential store.
         module_url = (repository / "adapter/cli.mjs").as_uri()
+        node_settings = {'url': url, 'token': bearer_token, 'clientLabel': 'Node integration test', 'timeout': 30}
+        if adapter_runtime == "node":
+            node_settings['thread'] = 'codex-thread-http-0000001'
         script = (
             f"import {{bridge, parseIdentity}} from {json.dumps(module_url)};"
-            f"const settings = {json.dumps({'url': url, 'token': bearer_token, 'thread': 'codex-thread-http-0000001', 'clientLabel': 'Node integration test', 'timeout': 30})};"
+            f"const settings = {json.dumps(node_settings)};"
             f"const identity = parseIdentity({json.dumps(json.dumps({'version': 1, 'client_uid': 'codex-node-http-test-0001', 'client_secret': 'T' * 43}))});"
             "const session = await bridge(settings, identity); await session.done;"
         )
@@ -388,24 +391,42 @@ async def test_adapter_propagates_identity_through_streamable_http(
     else:
         target = proxy
 
+    request_meta = {"threadId": "codex-thread-http-0000001"} if adapter_runtime == "node_metadata" else None
     try:
         async with asyncio.timeout(30), Client(target) as client:
-            started_raw = await client.call_tool_mcp(
+            assert await client.list_tools()
+            started_raw = await client.session.call_tool(
                 "macro_start_session",
                 {"human_key": "/identity/codex-http", "program": "codex", "model": "test"},
+                meta=request_meta,
             )
             started = structured_result(started_raw)
-            status_raw = await client.call_tool_mcp(
+            status_raw = await client.session.call_tool(
                 "identity_status",
                 {"project_key": "/identity/codex-http"},
+                meta=request_meta,
             )
             status = structured_result(status_raw)
-        if adapter_runtime == "node":
-            # Same identity and task across a fresh Node process must reconnect.
-            async with asyncio.timeout(30), Client(target) as client:
-                resumed = structured_result(await client.call_tool_mcp(
+            if adapter_runtime == "node_metadata":
+                other = structured_result(await client.session.call_tool(
                     "macro_start_session",
                     {"human_key": "/identity/codex-http", "program": "codex", "model": "test"},
+                    meta={"threadId": "codex-thread-http-0000002"},
+                ))
+                assert isinstance(other["agent"], dict) and isinstance(started["agent"], dict)
+                assert other["agent"]["id"] != started["agent"]["id"]
+                again = structured_result(await client.session.call_tool(
+                    "identity_status", {"project_key": "/identity/codex-http"}, meta=request_meta,
+                ))
+                assert isinstance(again["agent"], dict)
+                assert again["agent"]["id"] == started["agent"]["id"]
+        if adapter_runtime.startswith("node"):
+            # Same identity and task across a fresh Node process must reconnect.
+            async with asyncio.timeout(30), Client(target) as client:
+                resumed = structured_result(await client.session.call_tool(
+                    "macro_start_session",
+                    {"human_key": "/identity/codex-http", "program": "codex", "model": "test"},
+                    meta=request_meta,
                 ))
                 assert isinstance(resumed["agent"], dict)
                 assert isinstance(started["agent"], dict)

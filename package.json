@@ -1,6 +1,6 @@
 {
   "name": "@kosukework/agent-mail-adapter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Codex STDIO to Agent Mail HTTP adapter with persistent per-service identity",
   "license": "SEE LICENSE IN LICENSE",
   "repository": { "type": "git", "url": "https://github.com/KoSukeWork/mcp_agent_mail.git" },

@@ -97,8 +97,8 @@ test('TOML file secrets, strict keys, runtime-only thread and no cross-profile e
   assert.equal(result.clientLabel, 'Laptop');
   assert.ok(!JSON.stringify(result).includes('file-token'));
   assert.ok(!JSON.stringify(result).includes(settings.thread));
-  await assert.rejects(loadSettings(file, { env: {} }), /CODEX_THREAD_ID/);
-  assert.equal((await loadSettings(file, { env: {}, requireThread: false })).thread, undefined);
+  assert.equal((await loadSettings(file, { env: {} })).thread, undefined);
+  await assert.rejects(loadSettings(file, { env: { CODEX_THREAD_ID: 'invalid' } }), /Invalid runtime/);
   const forbidden = await config('url="https://mail.example.test/api/"\nCODEX_THREAD_ID="hardcoded-thread-00001"\n');
   await assert.rejects(loadSettings(forbidden, { env }), /Unknown config key/);
 });
@@ -186,6 +186,41 @@ test('reserved metadata cannot be spoofed; arguments and progress metadata are p
   assert.equal(sent.params.arguments.conversation_uid, 'untrusted');
   assert.equal(message.params._meta[IDENTITY_META_KEY].client_secret, 'spoofed');
   assert.equal(injectIdentity({ method: 'initialize', params: message.params }, settings, identity).params._meta[IDENTITY_META_KEY], undefined);
+});
+
+test('request-scoped Codex metadata works without startup env and never leaks across tasks', async t => {
+  const remote = mockRemote((m, r) => {
+    if (m.id !== undefined) r.onmessage({jsonrpc: '2.0', id: m.id, result: {content: []}});
+  });
+  const h = await harness(t, remote, {thread: undefined});
+  h.send({id: 1, method: 'tools/list'});
+  assert.ok((await h.wait(m => m.id === 1)).result);
+  for (const m of remote.sent) assert.equal(m.params?._meta?.[IDENTITY_META_KEY], undefined);
+  const threads = ['codex-task-first-00001', 'codex-task-second-00002', 'codex-task-first-00001'];
+  for (const [i, threadId] of threads.entries()) {
+    h.send({id: i + 2, method: 'tools/call', params: {name: 'identity_status', arguments: {}, _meta: {threadId}}});
+  }
+  for (const [i, threadId] of threads.entries()) {
+    assert.ok((await h.wait(m => m.id === i + 2)).result);
+    assert.equal(remote.sent.find(m => m.id === i + 2).params._meta[IDENTITY_META_KEY].conversation_uid, threadId);
+  }
+  const rejected = [
+    {arguments: {threadId: threads[0]}},
+    {_meta: {sessionId: threads[0]}},
+    {_meta: {threadId: null}},
+    {_meta: {threadId: 'short'}},
+    {_meta: {threadId: {value: threads[0]}}},
+    {_meta: {[IDENTITY_META_KEY]: {conversation_uid: threads[0]}}},
+  ];
+  for (const [i, params] of rejected.entries()) {
+    const id = i + 10;
+    h.send({id, method: 'tools/call', params: {name: 'identity_status', ...params}});
+    assert.equal((await h.wait(m => m.id === id)).error.code, -32000);
+    assert.ok(!remote.sent.some(m => m.id === id));
+  }
+  h.send({id: 30, method: 'tools/call', params: {name: 'identity_status', _meta: {threadId: threads[1]}}});
+  assert.ok((await h.wait(m => m.id === 30)).result); // A rejected call does not crash the bridge.
+  assert.throws(() => injectIdentity({method: 'tools/call', params: {_meta: {threadId: threads[0]}}}, settings, identity), /conflicts/);
 });
 
 test('STDIO forwards capabilities, tool results, resource reads, errors and notifications', async t => {

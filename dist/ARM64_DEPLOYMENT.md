@@ -176,10 +176,10 @@ server {
 客户端使用 npm 安装的 Node.js STDIO 适配器，无需 Python/uv；服务端仍使用上面的 Docker 部署。先安装 Node.js >=22.13（推荐 Node 24），再安装固定提交的适配器：
 
 ```bash
-npm install -g https://github.com/KoSukeWork/mcp_agent_mail/archive/ddc2d4bb4ff403251d302b48709fc242293546c4.tar.gz
+npm install -g https://github.com/KoSukeWork/mcp_agent_mail/archive/refs/heads/main.tar.gz
 ```
 
-公共 npm 包尚未发布，目前使用上述 GitHub archive 或维护者提供的 `.tgz` 安装。不要直接执行 registry `npx @kosukework/agent-mail-adapter`。
+公共 npm 包尚未发布，目前使用上述 GitHub archive 或维护者提供的 `.tgz` 安装。请确认版本至少为 0.1.1；公司批量分发时将 `refs/heads/main` 替换为审核过的完整提交 SHA。0.1.0 错误地要求启动时提供 `CODEX_THREAD_ID`，会导致当前 Codex 握手失败。不要直接执行 registry `npx @kosukework/agent-mail-adapter`。
 
 创建客户端 `~/.config/mcp-agent-mail/company.toml`（Windows 为 `%USERPROFILE%\.config\mcp-agent-mail\company.toml`）：
 
