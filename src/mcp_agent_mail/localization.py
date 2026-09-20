@@ -22,6 +22,9 @@ _current_interface_locale: ContextVar[str] = ContextVar(
 # fallback while the catalog grows.
 _ZH_CN: dict[str, str] = {
     "Identity administration": "身份管理",
+    "Page": "页码",
+    "Retire agent {name}? It will stop accepting new messages but message history is preserved.": "停用智能体 {name}？停用后不再接收新消息，但保留消息历史。",
+    "Unable to update agent": "无法更新智能体",
     "Manage trusted clients and Agent ownership. Mail and Agent records are preserved.": "管理可信客户端和智能体归属，保留邮件与智能体记录。",
     "Pending identity requests": "待审批身份申请",
     "Check the request ID with the requester. Client labels are self-declared, not proof of identity.": "请与申请人核对申请编号。客户端名称由客户端自行填写，不能作为身份凭据。",
