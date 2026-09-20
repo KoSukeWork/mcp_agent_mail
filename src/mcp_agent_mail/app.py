@@ -64,14 +64,12 @@ from .identity import (
     ResolvedConversationIdentity,
     bind_conversation_identity,
     create_bound_agent_identity,
-    decide_identity_transfer,
     get_identity_confirmation_status,
     list_client_agent_bindings,
     parse_identity_metadata,
     release_conversation_identity,
-    request_identity_recovery,
-    request_identity_transfer,
     resolve_conversation_identity,
+    transfer_or_request_recovery,
 )
 from .llm import complete_system_user
 from .models import (
@@ -6974,7 +6972,7 @@ def build_mcp_server() -> FastMCP:
         name="request_agent_identity_transfer",
         description=(
             "Request that this conversation take over an existing Agent owned by another conversation. "
-            "Approval uses native MCP elicitation or a client-opened browser confirmation; Agent names are not credentials."
+            "Transfers within the same authenticated client are immediate; cross-client recovery requires web administrator approval."
         ),
     )
     @_instrument_tool(
@@ -7000,7 +6998,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
             )
         try:
-            pending = await request_identity_transfer(
+            result = await transfer_or_request_recovery(
                 project,
                 agent,
                 credentials,
@@ -7009,66 +7007,26 @@ def build_mcp_server() -> FastMCP:
         except ConversationIdentityError as exc:
             raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
 
-        capabilities = getattr(getattr(ctx.session, "client_params", None), "capabilities", None)
-        if getattr(capabilities, "elicitation", None) is not None:
-            choice = await ctx.elicit(
-                (
-                    f"Transfer Agent {agent.name} in {project.human_key} to this conversation? "
-                    "The previously bound conversation will immediately lose permission to act as this Agent."
-                ),
-                ["Approve transfer", "Deny"],
-            )
-            approved = getattr(choice, "action", None) == "accept" and getattr(choice, "data", None) == "Approve transfer"
-            try:
-                resolved = await decide_identity_transfer(
-                    pending.request.request_uid,
-                    pending.challenge,
-                    approve=approved,
-                )
-            except ConversationIdentityError as exc:
-                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
-            if resolved is None:
-                return {
-                    "status": "denied",
-                    "confirmation_request_id": pending.request.request_uid,
-                    "agent_name": agent.name,
-                }
-            _bind_session_agent(ctx, project, resolved.agent)
+        if isinstance(result, ResolvedConversationIdentity):
+            _bind_session_agent(ctx, project, result.agent)
             return {
                 "status": "transferred",
-                "confirmation_request_id": pending.request.request_uid,
-                "agent": _agent_to_dict(resolved.agent),
-                "binding_generation": resolved.binding.generation,
+                "agent": _agent_to_dict(result.agent),
+                "binding_generation": result.binding.generation,
             }
-
-        if not settings.identity_browser_confirmation_enabled or not credentials.browser_confirmation:
-            return {
-                "status": "pending",
-                "confirmation_request_id": pending.request.request_uid,
-                "agent_name": agent.name,
-                "error": "IDENTITY_TRANSFER_CONFIRMATION_REQUIRED",
-                "message": "This MCP client must support native elicitation or browser confirmation.",
-            }
-        confirmation_url = (
-            f"{settings.identity_confirmation_base_url}/identity/confirm/"
-            f"{pending.request.request_uid}#challenge={pending.challenge}"
-        )
         return {
             "status": "pending",
-            "confirmation_request_id": pending.request.request_uid,
+            "confirmation_request_id": result.request.request_uid,
             "agent_name": agent.name,
-            "_client_action": {
-                "type": "open_browser",
-                "url": confirmation_url,
-                "sensitive": True,
-            },
+            "approval_path": "/mail/admin/identity",
+            "message": "Ask the web administrator to approve this recovery request.",
         }
 
     @mcp.tool(
         name="recover_agent_identity",
         description=(
             "Request recovery of an existing Agent into this conversation. "
-            "Any authenticated client may apply; a logged-in human web administrator must approve in /mail/admin/identity."
+            "Same-client ownership transfers immediately; other recovery requires web administrator approval in /mail/admin/identity."
         ),
     )
     @_instrument_tool(
@@ -7094,7 +7052,7 @@ def build_mcp_server() -> FastMCP:
                 recoverable=True,
             )
         try:
-            pending = await request_identity_recovery(
+            result = await transfer_or_request_recovery(
                 project,
                 agent,
                 credentials,
@@ -7103,9 +7061,16 @@ def build_mcp_server() -> FastMCP:
         except ConversationIdentityError as exc:
             raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
 
+        if isinstance(result, ResolvedConversationIdentity):
+            _bind_session_agent(ctx, project, result.agent)
+            return {
+                "status": "transferred",
+                "agent": _agent_to_dict(result.agent),
+                "binding_generation": result.binding.generation,
+            }
         return {
             "status": "pending",
-            "confirmation_request_id": pending.request.request_uid,
+            "confirmation_request_id": result.request.request_uid,
             "agent_name": agent.name,
             "approval_path": "/mail/admin/identity",
             "message": "Ask the web administrator to approve this request. No CLI grant or client admin scope is required.",

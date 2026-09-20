@@ -22,6 +22,8 @@ Format: entries are organized by version in reverse chronological order. Each ve
 
 ### Agent Identity and Lifecycle
 
+- Explicit Agent transfer/recovery within the same authenticated client completes without human confirmation. Cross-client and unowned identity recovery still require web administrator approval; revoked clients, occupied destinations, generation checks and audit trails remain enforced.
+
 - **npm adapter 0.1.1 startup fix** -- initialize without `CODEX_THREAD_ID`; resolve each tool call from Codex-owned `_meta.threadId`, never a cached task or model arguments. Missing/conflicting metadata fails closed without terminating the connection. Add interleaved-task and process-restart integration coverage; clarify that `--check` does not validate host task metadata.
 
 - **Web administrator identity management** -- add `/mail/admin/identity` with recovery approvals, client and binding revocation, client restoration and durable audit history. Ordinary authenticated clients can request recovery, but approval requires a logged-in human administrator and password confirmation. Add persistent web account changes and an emergency `identity reset-web-admin` command.

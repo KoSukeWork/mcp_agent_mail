@@ -537,6 +537,54 @@ async def request_identity_transfer(
         return PendingIdentityTransfer(request=request, challenge=challenge)
 
 
+async def transfer_or_request_recovery(
+    project: Project,
+    agent: Agent,
+    credentials: ClientConversationCredentials,
+    *,
+    ttl_seconds: int,
+) -> ResolvedConversationIdentity | PendingIdentityTransfer:
+    """Transfer within one authenticated client; require web approval otherwise.
+
+    Request creation snapshots the owner and generation. The atomic decision
+    rechecks both, the client's active state, and target occupancy before writing.
+    Never infer ownership from a client label or a shared transport bearer token.
+    """
+    principal = await authenticate_client_principal(credentials, allow_enrollment=True)
+    try:
+        existing = await resolve_conversation_identity(project, credentials)
+    except ConversationIdentityError as exc:
+        if exc.error_type != "IDENTITY_SESSION_REVOKED":
+            raise
+        async with get_session() as session:
+            previous = (await session.execute(select(AgentConversationBinding).where(
+                AgentConversationBinding.project_id == project.id,
+                AgentConversationBinding.client_principal_id == principal.id,
+                AgentConversationBinding.conversation_binding_hash == credentials.conversation_hash,
+            ))).scalars().first()
+        # A former owner may explicitly request a transfer back. Administrative
+        # revocation is different and must not be bypassed by that request.
+        if previous is None or previous.revocation_reason not in {"transferred", "recovered"}:
+            return await request_identity_recovery(project, agent, credentials, ttl_seconds=ttl_seconds)
+        existing = None
+    if existing is not None:
+        if existing.agent.id == agent.id:
+            return existing
+        raise ConversationIdentityError(
+            "IDENTITY_BINDING_CONFLICT",
+            "This conversation already owns another active Agent identity in the mailbox.",
+        )
+    try:
+        pending = await request_identity_transfer(project, agent, credentials, ttl_seconds=ttl_seconds)
+    except ConversationIdentityError as exc:
+        if exc.error_type not in {"IDENTITY_BINDING_REQUIRED", "IDENTITY_TRANSFER_CONFIRMATION_REQUIRED"}:
+            raise
+        return await request_identity_recovery(project, agent, credentials, ttl_seconds=ttl_seconds)
+    resolved = await decide_identity_transfer(pending.request.request_uid, pending.challenge, approve=True)
+    assert resolved is not None
+    return resolved
+
+
 async def request_identity_recovery(
     project: Project,
     agent: Agent,
@@ -807,6 +855,12 @@ async def decide_identity_transfer(
                 "IDENTITY_BINDING_CONFLICT",
                 "The target conversation already owns an active Agent identity.",
             )
+        if (target is not None and administrator is None
+                and target.revocation_reason not in {None, "released", "transferred", "recovered"}):
+            raise ConversationIdentityError(
+                "IDENTITY_SESSION_REVOKED",
+                "The target conversation was revoked by an administrator; request web recovery.",
+            )
         next_generation = agent.binding_generation + 1
         if source is not None:
             source.status = "revoked"
@@ -833,6 +887,8 @@ async def decide_identity_transfer(
             target.revocation_reason = None
             target.transferred_from_binding_id = source.id if source is not None else None
         agent.binding_generation = next_generation
+        agent.retired_at = None
+        agent.last_active_ts = now
         if request.action == "recover":
             agent.registration_token = None
             agent.service_credential_hash = None

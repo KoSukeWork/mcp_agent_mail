@@ -148,9 +148,15 @@ The Agent registration token is the one returned when `SageBay` was created; it 
 
 If the old Agent registration token is unavailable, it cannot be recovered because the server stores only its verification hash. Either let the trusted task create a new Agent, or use the explicit administrator identity-recovery workflow.
 
-## Web administrator recovery (no shell access required)
+## Identity transfer and web administrator recovery
 
-1. In the destination Codex task, call `recover_agent_identity(project_key=..., agent_name=...)` through the adapter. The task must not already own a different active Agent in that project. It receives a request ID; the operation is pending, not completed.
+Call `recover_agent_identity` or `request_agent_identity_transfer` explicitly when a different task needs an existing Agent. If its active owner belongs to the same authenticated client principal, the transfer completes immediately (`status: transferred`), without browser/native confirmation. The old task loses access, the generation advances, and an audit event is recorded. Repeating the request from the new owner is safe. Ordinary startup still resumes only the current task's own binding; it never silently takes another task's Agent.
+
+“Same client” means the persisted client identity and secret, not the MCP/profile name, client label, or shared HTTP bearer token. A different installation/credential, missing active ownership, or an administrator-revoked ownership requires web recovery. A revoked client cannot transfer; a destination already owning a different Agent must release that identity explicitly first. A former owner may explicitly request a same-client transfer back, but ordinary reconnect never reclaims ownership. Administrator-revoked task bindings require approval.
+
+This policy is server-side: deploy the updated server image. No npm adapter update is required.
+
+1. In the destination Codex task, call `recover_agent_identity(project_key=..., agent_name=...)` through the adapter. The task must not already own a different active Agent in that project. If same-client transfer returns `transferred`, it is complete: skip the approval steps. Otherwise it receives a request ID with `pending`; continue below.
 2. Sign in to `/mail` with the web administrator account and open **Identity administration** (`/mail/admin/identity`). Match the request ID, project, Agent and requesting client with the requester. Client labels are self-declared.
 3. Choose **Approve recovery / transfer**, enter the current administrator password, and confirm. The old owner immediately loses access; the Agent and its mail remain intact. Requests expire after the configured confirmation TTL (default five minutes); submit again if expired.
 4. In the destination task, check `identity_confirmation_status` and then resume with `macro_start_session`. The target is captured from the authenticated request; administrators never need to type a conversation ID or handle a client secret.

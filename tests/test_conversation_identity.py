@@ -459,9 +459,16 @@ async def test_approved_transfer_revokes_old_conversation_and_increments_generat
 
 
 @pytest.mark.asyncio
-async def test_native_mcp_elicitation_approves_transfer_without_browser_action(isolated_env):
+@pytest.mark.parametrize("tool_name", ["request_agent_identity_transfer", "recover_agent_identity"])
+async def test_same_client_transfer_needs_no_confirmation(isolated_env, tool_name):
     project, agent = await create_project_and_agent()
     await bind_conversation_identity(project, agent, credentials(), allow_client_enrollment=True)
+    async with get_session() as session:
+        stored = await session.get(Agent, agent.id)
+        assert stored is not None
+        stored.retired_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        session.add(stored)
+        await session.commit()
     prompts: list[str] = []
 
     async def approve(message, response_type, params, context):
@@ -475,16 +482,105 @@ async def test_native_mcp_elicitation_approves_transfer_without_browser_action(i
     server = build_mcp_server()
     async with Client(server, elicitation_handler=approve) as client:
         result_raw = await client.session.call_tool(
-            "request_agent_identity_transfer",
+            tool_name,
             {"project_key": project.human_key, "agent_name": agent.name},
             meta=identity_meta(conversation_uid="conversation-00000002"),
         )
         result = structured_result(result_raw)
+        repeated = structured_result(await client.session.call_tool(
+            tool_name,
+            {"project_key": project.human_key, "agent_name": agent.name},
+            meta=identity_meta(conversation_uid="conversation-00000002"),
+        ))
+        assert repeated["binding_generation"] == 2
 
-    assert prompts
+    assert not prompts
     assert result["status"] == "transferred"
     assert result["binding_generation"] == 2
     assert "_client_action" not in result
+    assert "challenge" not in str(result)
+    with pytest.raises(ConversationIdentityError, match="no longer owns"):
+        await resolve_conversation_identity(project, credentials())
+    resumed = await resolve_conversation_identity(project, credentials(conversation_uid="conversation-00000002"))
+    assert resumed is not None
+    assert resumed.agent.id == agent.id
+    assert resumed.agent.retired_at is None
+    async with Client(build_mcp_server()) as client:
+        returned = structured_result(await client.session.call_tool(
+            tool_name, {"project_key": project.human_key, "agent_name": agent.name}, meta=identity_meta(),
+        ))
+    assert returned["status"] == "transferred"
+    assert returned["binding_generation"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["request_agent_identity_transfer", "recover_agent_identity"])
+async def test_cross_client_transfer_requires_web_admin(isolated_env, tool_name):
+    project, agent = await create_project_and_agent()
+    await bind_conversation_identity(project, agent, credentials(), allow_client_enrollment=True)
+    meta = identity_meta(conversation_uid="conversation-00000002")
+    identity = meta[IDENTITY_META_KEY]
+    assert isinstance(identity, dict)
+    identity["client_uid"] = "different-client-installation-00001"
+    identity["client_secret"] = "B" * 43
+    # Labels and transport access are not proof of ownership.
+    identity["capabilities"] = []
+    async with Client(build_mcp_server()) as client:
+        result = structured_result(await client.session.call_tool(
+            tool_name, {"project_key": project.human_key, "agent_name": agent.name}, meta=meta,
+        ))
+    assert result["status"] == "pending"
+    assert result["approval_path"] == "/mail/admin/identity"
+    assert "_client_action" not in result
+    current = await resolve_conversation_identity(project, credentials())
+    assert current is not None
+    assert current.binding.generation == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["revoked_client", "occupied_target", "forged_secret", "revoked_owner"])
+async def test_automatic_transfer_preserves_authority_boundaries(isolated_env, state):
+    project, agent = await create_project_and_agent()
+    owner = await bind_conversation_identity(project, agent, credentials(), allow_client_enrollment=True)
+    meta = identity_meta(conversation_uid="conversation-00000002")
+    if state == "forged_secret":
+        identity = meta[IDENTITY_META_KEY]
+        assert isinstance(identity, dict)
+        identity["client_secret"] = "Z" * 43
+    async with get_session() as session:
+        if state == "revoked_client":
+            principal = await session.get(McpClientPrincipal, owner.principal.id)
+            assert principal is not None
+            principal.status = "revoked"
+            session.add(principal)
+        elif state == "revoked_owner":
+            binding = await session.get(AgentConversationBinding, owner.binding.id)
+            assert binding is not None
+            binding.status = "revoked"
+            binding.revocation_reason = "administrator"
+            session.add(binding)
+        await session.commit()
+    if state == "occupied_target":
+        async with get_session() as session:
+            other = Agent(project_id=project.id, name="BlueLake", program="test", model="test")
+            session.add(other)
+            await session.commit()
+            await session.refresh(other)
+        await bind_conversation_identity(
+            project, other, credentials(conversation_uid="conversation-00000002"), allow_client_enrollment=False,
+        )
+    async with Client(build_mcp_server()) as client:
+        raw = await client.session.call_tool(
+            "recover_agent_identity", {"project_key": project.human_key, "agent_name": agent.name}, meta=meta,
+        )
+    if state == "revoked_owner":
+        assert structured_result(raw)["status"] == "pending"
+    else:
+        assert raw.isError
+    async with get_session() as session:
+        stored = await session.get(Agent, agent.id)
+        assert stored is not None
+        assert stored.binding_generation == 1
 
 
 @pytest.mark.asyncio
