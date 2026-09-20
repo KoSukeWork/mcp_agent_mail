@@ -173,36 +173,42 @@ server {
 
 ## 4. Codex 客户端配置
 
-在客户端的 `~/.codex/config.toml` 中添加：
+客户端使用 npm 安装的 Node.js STDIO 适配器，无需 Python/uv；服务端仍使用上面的 Docker 部署。先安装 Node.js >=22.13（推荐 Node 24），再安装固定提交的适配器：
+
+```bash
+npm install -g https://github.com/KoSukeWork/mcp_agent_mail/archive/ddc2d4bb4ff403251d302b48709fc242293546c4.tar.gz
+```
+
+公共 npm 包尚未发布，目前使用上述 GitHub archive 或维护者提供的 `.tgz` 安装。不要直接执行 registry `npx @kosukework/agent-mail-adapter`。
+
+创建客户端 `~/.config/mcp-agent-mail/company.toml`（Windows 为 `%USERPROFILE%\.config\mcp-agent-mail\company.toml`）：
+
+```toml
+url = "https://mail.example.com/api/"
+token = "与服务端 HTTP_BEARER_TOKEN 相同的值"
+client_label = "Codex workstation"
+```
+
+这是连接配置，不是客户端身份密钥；身份密钥保存在操作系统凭据管理器中。无需把 Token 写入 Windows 环境变量，不要提交此文件。在客户端的 `~/.codex/config.toml` 中添加或更新对应项，保留其他配置：
 
 ```toml
 [mcp_servers.agent_mail]
-url = "https://mail.example.com/api/"
-bearer_token_env_var = "AGENT_MAIL_TOKEN"
-startup_timeout_sec = 300
-tool_timeout_sec = 300
+command = "agent-mail-adapter"
+args = ["--profile", "company"]
+startup_timeout_sec = 30
+tool_timeout_sec = 150
 enabled = true
 ```
 
-启动 Codex 前，把 `.env` 中的 `HTTP_BEARER_TOKEN` 放入客户端环境变量：
-
-Linux/macOS：
+执行只读连接检查，通过后重启 Codex：
 
 ```bash
-export AGENT_MAIL_TOKEN='与服务端 HTTP_BEARER_TOKEN 相同的值'
+agent-mail-adapter --profile company --check
 ```
 
-Windows PowerShell（当前终端会话）：
+同一个 npm 安装支持任意数量的 MCP 服务：每个服务使用独立 TOML profile 和 MCP 配置项，名称可自定义。替换对应旧 HTTP/Python 项以避免重复工具；旧客户端 `.env` 不会被 npm 适配器读取，但服务端 Docker 的 `.env` 必须保留。
 
-```powershell
-$env:AGENT_MAIL_TOKEN = '与服务端 HTTP_BEARER_TOKEN 相同的值'
-```
-
-重启 Codex 后检查：
-
-```bash
-codex mcp list
-```
+只读检查不创建身份。重启后在实际 Codex 任务中正常调用 `macro_start_session`，再用 `identity_status` 验证绑定。完整说明与 AI 配置提示词见 [Codex 适配器文档](../docs/CODEX_ADAPTER.md)。更新客户端不需要重新部署 Docker。
 
 ## 5. 重复更新部署
 

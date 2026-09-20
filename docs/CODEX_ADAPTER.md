@@ -21,13 +21,13 @@ npm install -g ./kosukework-agent-mail-adapter-0.1.0.tgz
 agent-mail-adapter --version
 ```
 
-Alternatively, after these changes are pushed, npm can install the repository archive directly (no manual clone or chosen installation directory):
+Alternatively, npm can install this reviewed repository archive directly (no manual clone or chosen installation directory):
 
 ```bash
-npm install -g https://github.com/KoSukeWork/mcp_agent_mail/archive/refs/heads/main.tar.gz
+npm install -g https://github.com/KoSukeWork/mcp_agent_mail/archive/ddc2d4bb4ff403251d302b48709fc242293546c4.tar.gz
 ```
 
-For reproducible company distribution, replace `refs/heads/main` with a reviewed full commit SHA, or host the packed `.tgz` at your company artifact URL. npm manages the installed program location. Do not run npm as administrator/root merely to work around a misconfigured npm prefix.
+For future company updates, use the next reviewed full commit SHA, or host the packed `.tgz` at your company artifact URL. npm manages the installed program location. Do not run npm as administrator/root merely to work around a misconfigured npm prefix.
 
 After a maintainer publishes an approved version, registry installation becomes:
 
@@ -91,22 +91,13 @@ Restart/reload the MCP configuration and test in a Codex task. The [official Ope
 ### 给 AI 的安装配置提示词
 
 ```text
-请配置 Codex 的 Agent Mail MCP，使用本仓库的 npm Node.js 适配器，不使用 Python/uv。
-安装来源：<已批准的 tgz 文件/URL，或固定提交的 GitHub archive URL>
-MCP 名称：<自选名称>
-Profile：<自选名称，例如 company>
-服务 MCP URL：<包含 /api/ 的完整地址>
-Token：<填写 Token>
-
-检查 Node >=22.13 和 npm，使用 npm install -g 安装上述来源，不手动选择程序目录。
-在当前用户 ~/.config/mcp-agent-mail/<profile>.toml 写入 url、token、client_label；
-若配置已存在，保留无关字段和其他服务配置，只更新本次指定内容。不要打印 Token。
-执行 agent-mail-adapter --profile <profile> --check，确认只读诊断通过。
-在现有 Codex 配置增加/更新对应 STDIO 项，command=agent-mail-adapter，
-args=[--profile,<profile>]，启动超时30秒、工具超时150秒；不要改动其他 MCP。
-不要配置或伪造 CODEX_THREAD_ID。提醒重载 MCP，并在 Codex 实际会话中验证 identity_status。
-相同服务的旧直连/Python 配置需确认对应关系后停用，避免重复工具。
-公共 npm 包尚未发布时，不要执行或声称 registry npx 命令可用。
+请配置 Codex 的 Agent Mail MCP，保留其他配置，不打印 Token。
+MCP 名称：<名称>；Profile：<profile>；服务 URL：<完整 /api/ 地址>；Token：<填写>。
+确认 Node >=22.13，用 npm install -g 安装：
+https://github.com/KoSukeWork/mcp_agent_mail/archive/ddc2d4bb4ff403251d302b48709fc242293546c4.tar.gz
+将 url、token 写入 ~/.config/mcp-agent-mail/<profile>.toml；对应 MCP 使用
+command="agent-mail-adapter"、args=["--profile","<profile>"]，启用并设置启动/工具超时为30/150秒。
+替换同一服务的旧配置，执行 agent-mail-adapter --profile <profile> --check 验证，提醒重启 Codex。
 ```
 
 ### Maintainer verification and packing
@@ -178,7 +169,7 @@ The command prompts for the new username and password and invalidates old sessio
 ## Troubleshooting
 
 - `CODEX_THREAD_ID` error: the adapter was launched outside a Codex task, the Codex host is too old, or the variable was explicitly removed from the child process. Do not hard-code one thread ID for multiple tasks.
-- HTTP 401/403: verify the bearer token in the selected service's env file and the server's RBAC role.
+- HTTP 401/403: verify `token` (or the explicit `token_env` variable) in the selected TOML profile and the server's RBAC role.
 - `UNTRUSTED_CONVERSATION_CONTEXT`: confirm Codex is connected to the STDIO adapter entry, not the old direct HTTP entry.
 - Credential-store error: the adapter intentionally fails instead of writing its client secret to a model-visible config file. On Windows, ensure Credential Manager is available for the user running Codex.
-- Wrong service or duplicate tools: give every service a distinct MCP name and env file, and disable obsolete direct entries.
+- Wrong service or duplicate tools: give every service a distinct MCP name and TOML profile, and disable obsolete direct/Python entries.

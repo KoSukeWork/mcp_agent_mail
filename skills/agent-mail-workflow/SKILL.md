@@ -9,6 +9,16 @@ Use Agent Mail as the coordination and audit layer for collaborating coding agen
 
 Tool prefixes vary by MCP configuration. Refer to tools by their logical names, such as `macro_start_session`, `fetch_inbox`, and `send_message`, while treating the MCP server namespace that exposes each tool as part of its identity.
 
+## Codex connection setup
+
+When asked to configure a Codex client, use the npm Node.js adapter, not a Python/uv client installation. Node.js >=22.13 is required (24 recommended). Install an approved adapter .tgz or pinned GitHub archive through npm; the public package `@kosukework/agent-mail-adapter` is not yet published. Do not assume registry installation works.
+
+One npm installation supports any number of MCP services. Each connection uses `command = "agent-mail-adapter"` and `args = ["--profile", "<profile>"]`; store its `url` and `token` in `~/.config/mcp-agent-mail/<profile>.toml`. An explicit `token_env` is optional instead of `token`. Preserve unrelated configuration and do not print credentials. The client's old .env is not loaded; the server's Docker .env remains necessary.
+
+Run `agent-mail-adapter --profile <profile> --check` for read-only diagnostics, then restart Codex. The adapter reads the task ID from Codex at runtime; never hard-code it. Identity credentials live in the OS credential store, not the TOML profile. After normal session startup, use `identity_status` to verify binding. Preserve endpoint URLs during migration, since identity isolation uses the normalized URL, not the MCP/profile name. Disable only the corresponding obsolete connection to avoid duplicate tools.
+
+For installation commands and recovery details, see the repository's [adapter guide](https://github.com/KoSukeWork/mcp_agent_mail/blob/main/docs/CODEX_ADAPTER.md). Ordinary mail coordination does not authorize installing or reconfiguring a client.
+
 ## Select services before any write
 
 Any number of Agent Mail MCP servers may be connected, and their purposes are deployment-specific. Do not assume a fixed count, a shared/private split, or meaning from a server's name. Treat every server namespace as an independent trust, identity, and data boundary even when several expose identical tools or point to related infrastructure.
