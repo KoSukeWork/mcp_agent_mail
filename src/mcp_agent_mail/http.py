@@ -49,6 +49,7 @@ from .identity import (
     ConversationIdentityError,
     administer_identity,
     decide_identity_transfer,
+    delete_agent_as_web_admin,
     get_identity_confirmation,
     identity_admin_snapshot,
 )
@@ -2613,6 +2614,13 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     target_id = payload.get("target")
                     if type(target_id) is not int or target_id < 1:
                         raise HTTPException(status_code=400, detail="Invalid target identifier.")
+                    if action == "delete_agent":
+                        project_key = payload.get("project")
+                        confirmation = payload.get("confirmation")
+                        if not isinstance(project_key, str) or not isinstance(confirmation, str):
+                            raise HTTPException(status_code=400, detail="Project and typed deletion confirmation required.")
+                        counts = await delete_agent_as_web_admin(target_id, project_key, confirmation)
+                        return JSONResponse({"success": True, "deleted": counts})
                     await administer_identity(action, target_id)
             except ConversationIdentityError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc

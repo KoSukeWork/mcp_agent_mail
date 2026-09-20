@@ -4,26 +4,32 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import func
+from sqlalchemy import delete, func, or_, update
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import select
+from sqlmodel import col, select
 
 from .config import get_settings
 from .db import ensure_schema, get_immediate_session, get_session
 from .models import (
     Agent,
     AgentConversationBinding,
+    AgentLink,
+    FileReservation,
     IdentityAdminEvent,
     IdentityConfirmationRequest,
     MailboxEvent,
     McpClientPrincipal,
+    Message,
+    MessageRecipient,
     Project,
+    WindowIdentity,
 )
 
 IDENTITY_META_KEY = "io.github.mcp-agent-mail/identity"
@@ -1028,10 +1034,73 @@ async def administer_identity(action: str, target_id: int) -> None:
         await session.commit()
 
 
+async def delete_agent_as_web_admin(target_id: int, project_key: str, confirmation: str) -> dict[str, int]:
+    """Delete one explicitly confirmed Agent's DB data, retaining archives and audit.
+
+    The HTTP boundary reauthenticates the administrator. Recheck the session
+    inside the write transaction so concurrent logout/account reset fails closed.
+    """
+    from .ui_auth import current_mail_ui_session, require_current_admin_transaction
+
+    administrator = current_mail_ui_session()
+    if administrator is None:
+        raise ConversationIdentityError("AUTHENTICATION_REQUIRED", "A logged-in web administrator is required.")
+    async with get_immediate_session() as session:
+        await require_current_admin_transaction(session)
+        agent = await session.get(Agent, target_id)
+        if agent is None:
+            raise ConversationIdentityError("NOT_FOUND", "Agent not found. Refresh the page.")
+        project = await session.get(Project, agent.project_id)
+        if project is None or project.human_key != project_key or confirmation != f"DELETE {agent.name}":
+            raise ValueError("Project and typed DELETE AgentName confirmation must match the selected Agent exactly.")
+
+        sent_ids = select(Message.id).where(Message.sender_id == target_id)
+        binding_ids = select(AgentConversationBinding.id).where(AgentConversationBinding.agent_id == target_id)
+        # Preserve other authors' replies while detaching references to removed messages.
+        await session.execute(update(Message).where(cast(Any, Message.reply_to).in_(sent_ids)).values(reply_to=None))
+        await session.execute(update(AgentConversationBinding).where(
+            cast(Any, AgentConversationBinding.transferred_from_binding_id).in_(binding_ids),
+        ).values(transferred_from_binding_id=None))
+        # References from other identities must not retain a dangling FK.
+        await session.execute(update(IdentityConfirmationRequest).where(
+            col(IdentityConfirmationRequest.agent_id) != target_id,
+            cast(Any, IdentityConfirmationRequest.source_binding_id).in_(binding_ids),
+        ).values(source_binding_id=None, status="denied", decided_at=_utcnow_naive()))
+        statements = {
+            "recipient_records": delete(MessageRecipient).where(or_(
+                col(MessageRecipient.agent_id) == target_id, cast(Any, MessageRecipient.message_id).in_(sent_ids),
+            )),
+            "messages_sent": delete(Message).where(col(Message.sender_id) == target_id),
+            "file_reservations": delete(FileReservation).where(col(FileReservation.agent_id) == target_id),
+            "contact_links": delete(AgentLink).where(or_(col(AgentLink.a_agent_id) == target_id, col(AgentLink.b_agent_id) == target_id)),
+            "window_identities": delete(WindowIdentity).where(
+                col(WindowIdentity.project_id) == agent.project_id, col(WindowIdentity.display_name) == agent.name,
+            ),
+            "identity_requests": delete(IdentityConfirmationRequest).where(col(IdentityConfirmationRequest.agent_id) == target_id),
+            "conversation_bindings": delete(AgentConversationBinding).where(col(AgentConversationBinding.agent_id) == target_id),
+        }
+        counts: dict[str, int] = {}
+        for label, statement in statements.items():
+            result = await session.execute(statement)
+            counts[label] = int(getattr(result, "rowcount", 0))
+        session.add(IdentityAdminEvent(
+            actor=administrator.username, action="delete_agent", target=str(target_id),
+            detail=json.dumps({"project": project.human_key, "agent": agent.name, "deleted": counts,
+                               "archives_retained": True}, ensure_ascii=False),
+        ))
+        await session.delete(agent)
+        await session.commit()
+        return counts
+
+
 async def identity_admin_snapshot(page: int = 1) -> dict[str, Any]:
     """Return bounded, secret-free pages for the authenticated management UI."""
     offset = (page - 1) * 100
     async with get_session() as session:
+        agents = (await session.execute(
+            select(Agent, Project.human_key).join(Project, cast(Any, Project.id == Agent.project_id))
+            .order_by(cast(Any, Agent.id)).offset(offset).limit(100)
+        )).all()
         clients = (await session.execute(select(McpClientPrincipal).order_by(cast(Any, McpClientPrincipal.id)).offset(offset).limit(100))).scalars().all()
         bindings = (await session.execute(
             select(AgentConversationBinding, Agent.name, Project.human_key, McpClientPrincipal.display_label)
@@ -1051,7 +1120,9 @@ async def identity_admin_snapshot(page: int = 1) -> dict[str, Any]:
         events = (await session.execute(select(IdentityAdminEvent).order_by(cast(Any, IdentityAdminEvent.id).desc()).offset(offset).limit(100))).scalars().all()
         return {
             "page": page,
-            "has_more": any(len(rows) == 100 for rows in (clients, bindings, requests, events)),
+            "has_more": any(len(rows) == 100 for rows in (clients, bindings, requests, events, agents)),
+            "agents": [{"id": a.id, "name": a.name, "project": project,
+                        "status": "retired" if a.retired_at else "active"} for a, project in agents],
             "clients": [{"id": p.id, "uid": p.client_uid, "label": p.display_label,
                          "status": p.status, "scopes": p.scopes, "last_seen": p.last_authenticated_at} for p in clients],
             "bindings": [{"id": b.id, "agent": name, "project": project, "client": label,

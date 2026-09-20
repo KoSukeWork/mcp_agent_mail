@@ -115,6 +115,142 @@ async def test_web_admin_recovers_identity_without_mcp_admin_grant(isolated_env,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bound", [False, True])
+async def test_web_admin_permanent_agent_deletion(isolated_env, monkeypatch, bound):
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import text
+
+    from mcp_agent_mail.identity import (
+        ClientConversationCredentials,
+        bind_conversation_identity,
+        request_identity_recovery,
+    )
+    from mcp_agent_mail.models import (
+        Agent,
+        AgentConversationBinding,
+        AgentLink,
+        FileReservation,
+        IdentityAdminEvent,
+        IdentityConfirmationRequest,
+        McpClientPrincipal,
+        Message,
+        MessageRecipient,
+        Project,
+        WindowIdentity,
+    )
+
+    client, _settings = await _build_client(monkeypatch)
+    async with get_session() as session:
+        project = Project(slug="delete-test", human_key="/delete-test")
+        other_project = Project(slug="keep-test", human_key="/keep-test")
+        session.add_all([project, other_project])
+        await session.flush()
+        target = Agent(project_id=project.id, name="SageBay", program="codex", model="test")
+        peer = Agent(project_id=project.id, name="SilverEagle", program="codex", model="test")
+        namesake = Agent(project_id=other_project.id, name="SageBay", program="codex", model="test")
+        session.add_all([target, peer, namesake])
+        await session.flush()
+        sent = Message(project_id=project.id, sender_id=target.id, subject="remove", body_md="remove")
+        session.add(sent)
+        await session.flush()
+        reply = Message(project_id=project.id, sender_id=peer.id, subject="keep", body_md="keep", reply_to=sent.id)
+        session.add(reply)
+        await session.flush()
+        session.add_all([
+            MessageRecipient(message_id=sent.id, agent_id=peer.id),
+            MessageRecipient(message_id=reply.id, agent_id=target.id),
+            MessageRecipient(message_id=reply.id, agent_id=peer.id),
+            FileReservation(project_id=project.id, agent_id=target.id, path_pattern="target.py", expires_ts=datetime.now() + timedelta(hours=1)),
+            AgentLink(a_project_id=project.id, a_agent_id=target.id, b_project_id=project.id, b_agent_id=peer.id),
+            WindowIdentity(project_id=project.id, window_uuid="target-window", display_name=target.name),
+            WindowIdentity(project_id=other_project.id, window_uuid="keep-window", display_name=target.name),
+        ])
+        await session.commit()
+        for row in (project, target, peer, namesake, sent, reply):
+            await session.refresh(row)
+    if bound:
+        credentials = ClientConversationCredentials("delete-client-000001", "A" * 43, "delete-task-00000001", "Keep client", False)
+        owner = await bind_conversation_identity(project, target, credentials, allow_client_enrollment=True)
+        other_credentials = ClientConversationCredentials("delete-client-000001", "A" * 43, "keep-task-0000000001", "Keep client", False)
+        await bind_conversation_identity(project, peer, other_credentials, allow_client_enrollment=False)
+        recovery = ClientConversationCredentials("recovery-client-001", "B" * 43, "recovery-task-000001", "Recovery", False)
+        await request_identity_recovery(project, target, recovery, ttl_seconds=300)
+        async with get_session() as session:
+            previous = AgentConversationBinding(
+                project_id=project.id, agent_id=target.id, client_principal_id=owner.principal.id,
+                conversation_binding_hash="old-conversation-hash", status="revoked",
+            )
+            session.add(previous)
+            await session.flush()
+            current = await session.get(AgentConversationBinding, owner.binding.id)
+            assert current is not None
+            current.transferred_from_binding_id = previous.id
+            session.add(current)
+            await session.commit()
+
+    payload = {"action": "delete_agent", "target": target.id, "project": project.human_key,
+               "confirmation": "DELETE SageBay", "password": "ui-secret-ok"}
+    async with client:
+        assert (await client.post("/mail/api/admin/identity", json=payload)).status_code == 401
+        await _sign_in(client)
+        page = await client.get("/mail/admin/identity")
+        assert 'data-agent="SageBay"' in page.text  # Includes legacy unbound identities.
+        csrf_match = _CSRF_META_RE.search(page.text)
+        assert csrf_match is not None
+        headers = {"Origin": "http://test", "X-CSRF-Token": csrf_match.group(1)}
+        assert (await client.post("/mail/api/admin/identity", json=payload)).status_code == 403
+        assert (await client.post("/mail/api/admin/identity", json=payload, headers={**headers, "Origin": "http://evil.test"})).status_code == 403
+        for field, value, code in [("password", "wrong", 403), ("confirmation", "DELETE SilverEagle", 400),
+                                   ("project", "/wrong-project", 400), ("target", True, 400)]:
+            result = await client.post("/mail/api/admin/identity", json={**payload, field: value}, headers=headers)
+            assert result.status_code == code, result.text
+        async with get_session() as session:
+            assert await session.get(Agent, target.id) is not None
+            assert await session.get(Message, sent.id) is not None
+        # A failure after cleanup must roll back every deletion, not leave half an identity.
+        from mcp_agent_mail import identity as identity_module
+
+        def unavailable_audit(**kwargs):
+            raise RuntimeError("audit unavailable")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(identity_module, "IdentityAdminEvent", unavailable_audit)
+            with pytest.raises(RuntimeError, match="audit unavailable"):
+                await client.post("/mail/api/admin/identity", json=payload, headers=headers)
+        async with get_session() as session:
+            assert await session.get(Agent, target.id) is not None
+            assert await session.get(Message, sent.id) is not None
+            preserved_reply = await session.get(Message, reply.id)
+            assert preserved_reply is not None and preserved_reply.reply_to == sent.id
+        deleted = await client.post("/mail/api/admin/identity", json=payload, headers=headers)
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["deleted"]["messages_sent"] == 1
+        assert (await client.post("/mail/api/admin/identity", json=payload, headers=headers)).status_code == 409
+    async with get_session() as session:
+        assert await session.get(Agent, target.id) is None
+        assert await session.get(Agent, peer.id) is not None
+        assert await session.get(Agent, namesake.id) is not None
+        assert await session.get(Message, sent.id) is None
+        kept = await session.get(Message, reply.id)
+        assert kept is not None and kept.body_md == "keep" and kept.reply_to is None
+        recipients = (await session.execute(select(MessageRecipient))).scalars().all()
+        assert [(r.message_id, r.agent_id) for r in recipients] == [(reply.id, peer.id)]
+        for table in (FileReservation, AgentLink, IdentityConfirmationRequest):
+            assert not (await session.execute(select(table))).scalars().all()
+        bindings = (await session.execute(select(AgentConversationBinding))).scalars().all()
+        assert len(bindings) == int(bound)
+        assert all(b.agent_id == peer.id and b.status == "active" for b in bindings)
+        if bound:
+            assert all(p.status == "active" for p in (await session.execute(select(McpClientPrincipal))).scalars())
+        windows = (await session.execute(select(WindowIdentity))).scalars().all()
+        assert len(windows) == 1 and windows[0].window_uuid == "keep-window"
+        audit = (await session.execute(select(IdentityAdminEvent).where(cast(Any, IdentityAdminEvent.action) == "delete_agent"))).scalars().all()
+        assert len(audit) == 1 and audit[0].actor == "operator" and '"agent": "SageBay"' in audit[0].detail
+        assert not (await session.execute(text("PRAGMA foreign_key_check"))).all()
+
+
+@pytest.mark.asyncio
 async def test_web_admin_account_change_persists_and_cli_reset_invalidates_sessions(isolated_env, monkeypatch):
     from mcp_agent_mail.ui_auth import reset_web_administrator
 

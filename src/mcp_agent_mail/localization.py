@@ -22,6 +22,13 @@ _current_interface_locale: ContextVar[str] = ContextVar(
 # fallback while the catalog grows.
 _ZH_CN: dict[str, str] = {
     "Identity administration": "身份管理",
+    "Manage trusted clients and Agent ownership. Permanent Agent deletion is a separate destructive action.": "管理可信客户端和智能体归属。永久删除智能体是独立的破坏性操作。",
+    "Permanently delete an Agent": "永久删除智能体",
+    "Permanently delete": "永久删除",
+    "Deletion cannot be undone in the UI. It removes the Agent, messages it sent (including recipients’ copies), recipient records, reservations, contacts, bindings and identity requests. Other authors’ messages, other Agents, clients, audit history and legacy archive files are retained.": "删除无法在网页中撤销。将删除该智能体、它发出的邮件（包括收件人侧记录）、收件记录、文件预留、联系人关系、会话绑定和身份申请。保留他人发送的邮件、其他智能体、客户端、审计历史和旧归档文件。",
+    "Permanent deletion also removes this Agent’s sent messages from other inboxes. Back up the database first if needed. Legacy archives are not erased.": "永久删除也会从其他收件箱移除该智能体发出的邮件。如需保留，请先备份数据库。旧归档文件不会被擦除。",
+    "Type exactly:": "请准确输入：",
+    "Deletion confirmation does not match.": "删除确认内容不匹配。",
     "Page": "页码",
     "Retire agent {name}? It will stop accepting new messages but message history is preserved.": "停用智能体 {name}？停用后不再接收新消息，但保留消息历史。",
     "Unable to update agent": "无法更新智能体",

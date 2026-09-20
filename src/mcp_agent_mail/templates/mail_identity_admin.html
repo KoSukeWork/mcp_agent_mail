@@ -19,7 +19,7 @@
 </style>
 <main class="identity-admin">
   <h1>{{ _('Identity administration') }}</h1>
-  <p>{{ _('Manage trusted clients and Agent ownership. Mail and Agent records are preserved.') }}</p>
+  <p>{{ _('Manage trusted clients and Agent ownership. Permanent Agent deletion is a separate destructive action.') }}</p>
   <p role="status" id="admin-status" aria-live="polite"></p>
 
   <h2>{{ _('Pending identity requests') }}</h2>
@@ -55,9 +55,24 @@
     </tr>{% else %}<tr><td colspan="5">{{ _('No records on this page.') }}</td></tr>{% endfor %}</tbody>
   </table></div>
 
+  <h2>{{ _('Permanently delete an Agent') }}</h2>
+  <p>{{ _('Deletion cannot be undone in the UI. It removes the Agent, messages it sent (including recipients’ copies), recipient records, reservations, contacts, bindings and identity requests. Other authors’ messages, other Agents, clients, audit history and legacy archive files are retained.') }}</p>
+  <div class="table-scroll"><table>
+    <thead><tr><th>{{ _('Agent / Project') }}</th><th>{{ _('Status') }}</th><th>{{ _('Actions') }}</th></tr></thead>
+    <tbody>{% for a in agents %}<tr>
+      <td>#{{ a.id }} · {{ a.name }}<br><code>{{ a.project }}</code></td><td>{{ a.status }}</td>
+      <td><button type="button" data-action="delete_agent" data-target="{{ a.id }}" data-project="{{ a.project }}" data-agent="{{ a.name }}" data-label="{{ a.name }} · {{ a.project }}">{{ _('Permanently delete') }}</button></td>
+    </tr>{% else %}<tr><td colspan="3">{{ _('No records on this page.') }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+
   <form id="identity-action-form" class="action-form" hidden>
     <p id="selected-action"></p>
     <p>{{ _('Approval replaces the previous owner immediately. Revocation stops future access. Verify the selected target before continuing.') }}</p>
+    <div id="delete-confirmation-fields" hidden>
+      <p>{{ _('Permanent deletion also removes this Agent’s sent messages from other inboxes. Back up the database first if needed. Legacy archives are not erased.') }}</p>
+      <label for="delete-confirmation" id="delete-confirmation-label"></label>
+      <input id="delete-confirmation" autocomplete="off" maxlength="135">
+    </div>
     <label for="admin-password">{{ _('Current administrator password') }}</label>
     <input id="admin-password" type="password" autocomplete="current-password" maxlength="1024" required>
     <button type="submit">{{ _('Confirm action') }}</button>
@@ -92,6 +107,8 @@
   const actionForm = document.getElementById('identity-action-form');
   const status = document.getElementById('admin-status');
   let selected = null;
+  let expectedConfirmation = '';
+  const deletionInput = document.getElementById('delete-confirmation');
   let busy = false;
   async function submit(payload) {
     if (busy) return;
@@ -118,6 +135,14 @@
   }
   document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => {
     selected = {action: button.dataset.action, target: button.dataset.action.endsWith('_request') ? button.dataset.target : Number(button.dataset.target)};
+    const deleting = selected.action === 'delete_agent';
+    if (deleting) selected.project = button.dataset.project;
+    expectedConfirmation = deleting ? 'DELETE ' + button.dataset.agent : '';
+    document.getElementById('delete-confirmation-fields').hidden = !deleting;
+    document.getElementById('delete-confirmation-label').textContent = {{ _('Type exactly:') | tojson }} + ' ' + expectedConfirmation;
+    deletionInput.value = '';
+    deletionInput.required = deleting;
+    deletionInput.setCustomValidity('');
     document.getElementById('selected-action').textContent = button.textContent + ': ' + button.dataset.label;
     actionForm.hidden = false;
     document.getElementById('admin-password').value = '';
@@ -129,8 +154,14 @@
   });
   actionForm.addEventListener('submit', event => {
     event.preventDefault();
+    if (selected && selected.action === 'delete_agent') {
+      deletionInput.setCustomValidity(deletionInput.value === expectedConfirmation ? '' : {{ _('Deletion confirmation does not match.') | tojson }});
+      if (!deletionInput.reportValidity()) return;
+      selected.confirmation = deletionInput.value;
+    }
     if (selected) submit({...selected, password: document.getElementById('admin-password').value});
   });
+  deletionInput.addEventListener('input', () => deletionInput.setCustomValidity(''));
   document.getElementById('account-form').addEventListener('submit', event => {
     event.preventDefault();
     const password = document.getElementById('account-new');
