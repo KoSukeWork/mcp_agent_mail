@@ -8,69 +8,119 @@ Codex task -> local STDIO adapter -> remote Agent Mail HTTP MCP
 
 The remote HTTP bearer token still authenticates the connection. It does not identify a Codex task. The adapter separately uses Codex's stable `CODEX_THREAD_ID` as the conversation identity and keeps a high-entropy client credential in the operating-system credential manager.
 
-## 1. Create one env file per Agent Mail service
+## 1. Install the npm adapter / 安装
 
-An env file contains only that service's static connection settings:
+The distributable adapter is implemented in Node.js, **not a wrapper around Python**. End users need Node.js >=22.13 (Node 24 LTS recommended), but no Python, uv, repository checkout or compiler. Native credential-store modules are downloaded by npm for supported platforms. Windows Credential Manager and macOS Keychain are supported by the dependency; Linux requires a running, unlocked Secret Service (for example GNOME Keyring). Headless Linux without that service fails closed instead of silently losing identity after reboot.
 
-```dotenv
-MCP_AGENT_MAIL_URL=http://agent-mail.example.internal:8765/api/
-MCP_AGENT_MAIL_BEARER_TOKEN=replace-with-that-service-bearer-token
-MCP_AGENT_MAIL_CLIENT_LABEL=Codex workstation
+Package name: `@kosukework/agent-mail-adapter`, executable: `agent-mail-adapter`. **The package has not been published to the public npm registry.** The scope is a proposed release name; a maintainer must own it or rename the package before publishing. Do not tell users that a bare registry `npx` command already works.
+
+Install the versioned `.tgz` produced by `npm pack`:
+
+```bash
+npm install -g ./kosukework-agent-mail-adapter-0.1.0.tgz
+agent-mail-adapter --version
 ```
 
-The label is optional. Do not put `CODEX_THREAD_ID` in this file: Codex supplies it dynamically for the current task. Keep the env file outside a Git repository or ensure it is ignored.
+Alternatively, after these changes are pushed, npm can install the repository archive directly (no manual clone or chosen installation directory):
 
-Multiple services are supported. Give each service its own env file and MCP server entry. The adapter scopes its client identity to the normalized upstream URL, so identities and credentials never cross service boundaries.
+```bash
+npm install -g https://github.com/KoSukeWork/mcp_agent_mail/archive/refs/heads/main.tar.gz
+```
 
-If a bearer token already lives in a local environment variable, the adapter can reuse it without copying the value into the env file. Add the variable name to the Codex server's `env_vars` list and pass `--bearer-token-env-var VARIABLE_NAME` in `args`. The adapter fails closed when an explicitly named variable is unavailable.
+For reproducible company distribution, replace `refs/heads/main` with a reviewed full commit SHA, or host the packed `.tgz` at your company artifact URL. npm manages the installed program location. Do not run npm as administrator/root merely to work around a misconfigured npm prefix.
 
-## 2. Configure Codex to start the adapter
+After a maintainer publishes an approved version, registry installation becomes:
 
-Codex supports local STDIO MCP servers configured by command and arguments. Add an entry to `%USERPROFILE%\.codex\config.toml` on Windows or `~/.codex/config.toml` on Linux/macOS.
+```bash
+npm install -g @kosukework/agent-mail-adapter@0.1.0
+```
 
-Windows example using this repository's uv project:
+## 2. Configure a profile and Codex / 配置
+
+Use one profile per endpoint, with **any number of services and arbitrary MCP names**. A profile called `company` lives at `~/.config/mcp-agent-mail/company.toml` on all platforms, including `%USERPROFILE%\.config\mcp-agent-mail\company.toml` on Windows:
+
+```toml
+url = "http://agent-mail.example.internal:8765/api/"
+token = "REPLACE_WITH_SERVICE_TOKEN"
+client_label = "Codex workstation"
+request_timeout_seconds = 120
+```
+
+Only `url` is mandatory. Keep the file outside repositories; on Unix use mode 600. This file contains the service Bearer Token, not the adapter's generated client secret. It is parsed directly as TOML; it does not require Windows environment-variable setup. It does **not** load a repository `.env` or inherit another service's token implicitly.
+
+If explicitly desired, replace `token` with `token_env = "EXISTING_TOKEN_VARIABLE"` and forward that variable using the MCP entry's `env_vars`. Using both fields, missing explicit variables, unknown fields, or a configured conversation ID is rejected. `CODEX_THREAD_ID` comes only from the Codex process environment, never this file or a CLI argument.
+
+Run a read-only installation/connection diagnostic before registering the MCP:
+
+```bash
+agent-mail-adapter --profile company --check
+```
+
+This verifies profile syntax, credential-store readability, MCP initialization and availability of `macro_start_session`. It does not create a client identity, register an Agent or claim a project, and works outside Codex. Success emits a small JSON result without credentials. It does not prove that Codex forwards its task ID; verify that with `identity_status` after a normal task startup.
+
+Add the following to the existing user-level Codex config, preserving all unrelated entries:
 
 ```toml
 [mcp_servers.company_agent_mail]
-command = "uv"
-args = [
-  "run",
-  "--project",
-  'Q:\Temp\Work\mcp_agent_mail',
-  "python",
-  "-m",
-  "mcp_agent_mail",
-  "codex-adapter",
-  "--env-file",
-  'C:\Users\YOUR_NAME\.config\mcp-agent-mail\company.env',
-]
-startup_timeout_sec = 20
-tool_timeout_sec = 120
+command = "agent-mail-adapter"
+args = ["--profile", "company"]
+startup_timeout_sec = 30
+tool_timeout_sec = 150
 ```
 
-Linux/macOS example:
+If using a custom config location, replace `--profile company` with `--config` and an absolute TOML file path. The executable location still belongs to npm. If Windows cannot resolve an npm command shim, use the verified `node.exe` executable and installed JS entry path returned by `npm root -g`; do not guess a path or move the package manually. Restart Codex after first installing Node/npm so it picks up PATH.
+
+Once the package has actually been published, the no-global-install alternative is:
 
 ```toml
 [mcp_servers.company_agent_mail]
-command = "uv"
-args = [
-  "run",
-  "--project",
-  "/opt/mcp_agent_mail",
-  "python",
-  "-m",
-  "mcp_agent_mail",
-  "codex-adapter",
-  "--env-file",
-  "/home/YOUR_NAME/.config/mcp-agent-mail/company.env",
-]
-startup_timeout_sec = 20
-tool_timeout_sec = 120
+command = "npx"
+args = ["-y", "@kosukework/agent-mail-adapter@0.1.0", "--profile", "company"]
+startup_timeout_sec = 60
+tool_timeout_sec = 150
 ```
 
-Replace or disable the old direct HTTP entry for the same Agent Mail service. Keeping both entries enabled exposes two copies of every tool, but only the adapter-backed copy has trusted task identity.
+Pin reviewed versions; don't silently update a credential-handling program with every MCP start. To update, install the next approved package/version through npm and restart that MCP connection. Profile files and OS credentials are separate from npm's installation/cache and survive package updates.
 
-Restart Codex after changing `config.toml`. The ChatGPT desktop app, Codex CLI, and IDE extension share the MCP configuration for the same Codex host. See the [official OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp) for the current STDIO configuration fields.
+The MCP name and profile filename do not define the credential boundary: the normalized HTTP URL (scheme, host, port and path) does. Equivalent trailing slashes/default ports share the identity; distinct endpoints don't. Changing a hostname or switching `/api/` to `/mcp/` is a different identity boundary even if both reach the same server. Keep the old URL when switching from Python, or use web-admin recovery. Profiles pointing to the same URL intentionally share one local client identity; use separate OS users for independently owned client credentials on the same endpoint.
+
+Replace or disable the old direct HTTP/Python entry for that endpoint to avoid duplicate tools. The Python developer adapter remains available, but is not shipped in the npm package. Its `.env` settings must be translated to the TOML fields above. On Windows, existing Python version-1 credentials are read from their exact OS-store target without exporting or overwriting them. Do not run Python and Node first enrollment concurrently during a migration.
+
+Restart/reload the MCP configuration and test in a Codex task. The [official OpenAI MCP documentation](https://developers.openai.com/codex/mcp/) documents command/args and npm-based STDIO configuration.
+
+### 给 AI 的安装配置提示词
+
+```text
+请配置 Codex 的 Agent Mail MCP，使用本仓库的 npm Node.js 适配器，不使用 Python/uv。
+安装来源：<已批准的 tgz 文件/URL，或固定提交的 GitHub archive URL>
+MCP 名称：<自选名称>
+Profile：<自选名称，例如 company>
+服务 MCP URL：<包含 /api/ 的完整地址>
+Token：<填写 Token>
+
+检查 Node >=22.13 和 npm，使用 npm install -g 安装上述来源，不手动选择程序目录。
+在当前用户 ~/.config/mcp-agent-mail/<profile>.toml 写入 url、token、client_label；
+若配置已存在，保留无关字段和其他服务配置，只更新本次指定内容。不要打印 Token。
+执行 agent-mail-adapter --profile <profile> --check，确认只读诊断通过。
+在现有 Codex 配置增加/更新对应 STDIO 项，command=agent-mail-adapter，
+args=[--profile,<profile>]，启动超时30秒、工具超时150秒；不要改动其他 MCP。
+不要配置或伪造 CODEX_THREAD_ID。提醒重载 MCP，并在 Codex 实际会话中验证 identity_status。
+相同服务的旧直连/Python 配置需确认对应关系后停用，避免重复工具。
+公共 npm 包尚未发布时，不要执行或声称 registry npx 命令可用。
+```
+
+### Maintainer verification and packing
+
+```bash
+npm ci --ignore-scripts
+npm run check:adapter
+npm run test:adapter
+uv run --python 3.14 pytest -q --no-cov tests/test_codex_adapter.py
+npm pack --dry-run
+npm pack --pack-destination dist
+```
+
+`files` is an explicit npm allowlist: only the adapter runtime, documentation, license and package metadata ship, not server source, tests, Docker tarballs or config/credential files. The root package retains the existing web-asset development scripts. No install/prepare script runs a Python build. Never overwrite an existing release tarball; bump the package and CLI versions together. Publication is a separate maintainer action, not part of installation or testing.
 
 ## 3. Start or resume a task identity
 

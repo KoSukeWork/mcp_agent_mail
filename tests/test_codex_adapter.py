@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import socket
 from pathlib import Path
 
 import pytest
 import uvicorn
 from fastmcp import Client, FastMCP
-from fastmcp.client.transports import FastMCPTransport, StreamableHttpTransport
+from fastmcp.client.transports import FastMCPTransport, StdioTransport, StreamableHttpTransport
 from fastmcp.server import Context
 
 from mcp_agent_mail.app import build_mcp_server
@@ -335,10 +336,16 @@ async def test_macro_migrates_a_legacy_named_agent_once(isolated_env) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("adapter_runtime", ["python", "node"])
 async def test_adapter_propagates_identity_through_streamable_http(
     isolated_env,
     monkeypatch,
+    adapter_runtime: str,
 ) -> None:
+    node = shutil.which("node")
+    repository = Path(__file__).parents[1]
+    if adapter_runtime == "node" and (node is None or not (repository / "node_modules/@modelcontextprotocol/sdk").is_dir()):
+        pytest.skip("Node adapter dependencies unavailable; run npm install first.")
     bearer_token = "adapter-http-test-bearer"
     monkeypatch.setenv("HTTP_BEARER_TOKEN", bearer_token)
     monkeypatch.setenv("HTTP_ALLOW_LOCALHOST_UNAUTHENTICATED", "false")
@@ -367,9 +374,22 @@ async def test_adapter_propagates_identity_through_streamable_http(
         credential_store=MemoryCredentialStore(),
         transport=transport,
     )
+    if adapter_runtime == "node":
+        # Exercise the actual Node STDIO/HTTP bridge with test-only credentials;
+        # do not create or touch entries in the developer's OS credential store.
+        module_url = (repository / "adapter/cli.mjs").as_uri()
+        script = (
+            f"import {{bridge, parseIdentity}} from {json.dumps(module_url)};"
+            f"const settings = {json.dumps({'url': url, 'token': bearer_token, 'thread': 'codex-thread-http-0000001', 'clientLabel': 'Node integration test', 'timeout': 30})};"
+            f"const identity = parseIdentity({json.dumps(json.dumps({'version': 1, 'client_uid': 'codex-node-http-test-0001', 'client_secret': 'T' * 43}))});"
+            "const session = await bridge(settings, identity); await session.done;"
+        )
+        target = StdioTransport(command=node or "node", args=["--input-type=module", "-e", script], cwd=str(repository), keep_alive=False)
+    else:
+        target = proxy
 
     try:
-        async with asyncio.timeout(15), Client(proxy) as client:
+        async with asyncio.timeout(30), Client(target) as client:
             started_raw = await client.call_tool_mcp(
                 "macro_start_session",
                 {"human_key": "/identity/codex-http", "program": "codex", "model": "test"},
@@ -380,6 +400,17 @@ async def test_adapter_propagates_identity_through_streamable_http(
                 {"project_key": "/identity/codex-http"},
             )
             status = structured_result(status_raw)
+        if adapter_runtime == "node":
+            # Same identity and task across a fresh Node process must reconnect.
+            async with asyncio.timeout(30), Client(target) as client:
+                resumed = structured_result(await client.call_tool_mcp(
+                    "macro_start_session",
+                    {"human_key": "/identity/codex-http", "program": "codex", "model": "test"},
+                ))
+                assert isinstance(resumed["agent"], dict)
+                assert isinstance(started["agent"], dict)
+                assert resumed["agent"]["id"] == started["agent"]["id"]
+                assert resumed["agent"]["identity_action"] == "reconnected"
     finally:
         http_server.should_exit = True
         await asyncio.wait_for(server_task, timeout=10)

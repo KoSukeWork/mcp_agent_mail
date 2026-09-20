@@ -7,6 +7,31 @@ on:
     branches: [main]
 
 jobs:
+  node-adapter:
+    name: npm adapter (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: "22" }
+          - { os: windows-latest, node: "24" }
+          - { os: macos-latest, node: "24" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install locked npm dependencies
+        env:
+          npm_config_user_agent: OpenAI File Downloader, XaiImageApiFetch/1.0
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check:adapter
+      - run: npm run test:adapter
+      - name: Verify npm package contents
+        run: npm pack --dry-run
+
   web-assets:
     name: Web assets
     runs-on: ubuntu-latest
@@ -53,6 +78,20 @@ jobs:
 
       - name: Sync locked development environment
         run: uv sync --locked --dev
+
+      - name: Set up Node.js for real adapter integration tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install adapter dependencies
+        env:
+          npm_config_user_agent: OpenAI File Downloader, XaiImageApiFetch/1.0
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Test Python and Node adapters against real HTTP server
+        run: uv run pytest tests/test_codex_adapter.py -q --no-cov --tb=short
 
       - name: Lint
         run: uv run ruff check
