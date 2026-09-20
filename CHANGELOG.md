@@ -22,6 +22,8 @@ Format: entries are organized by version in reverse chronological order. Each ve
 
 ### Agent Identity and Lifecycle
 
+- **Web administrator identity management** -- add `/mail/admin/identity` with recovery approvals, client and binding revocation, client restoration and durable audit history. Ordinary authenticated clients can request recovery, but approval requires a logged-in human administrator and password confirmation. Add persistent web account changes and an emergency `identity reset-web-admin` command.
+
 - **Codex trusted conversation adapter** -- add a local STDIO-to-HTTP proxy that injects model-inaccessible `CODEX_THREAD_ID` metadata, stores one client credential per upstream service in the operating-system credential manager, and lets workflow macros create or resume the same Agent without returning registration tokens. Includes atomic first-use enrollment/binding and one-time migration of legacy named Agents.
 - **Persistent window-based agent identity** -- agents get a stable identity tied to their terminal pane, surviving restarts ([32afeab](https://github.com/Dicklesworthstone/mcp_agent_mail/commit/32afeabaa2350ec7a133235c8e2b99141858bbb0))
 - **Canonical per-pane agent identity file contract** -- formalized the on-disk identity file protocol for multi-agent environments ([6715be6](https://github.com/Dicklesworthstone/mcp_agent_mail/commit/6715be67b9982abe2611c3e466f98a2946cd0f86))

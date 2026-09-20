@@ -251,6 +251,28 @@ class McpClientPrincipal(SQLModel, table=True):
     revocation_reason: Optional[str] = Field(default=None, max_length=2048)
 
 
+class MailUIAdministrator(SQLModel, table=True):
+    """Singleton web administrator override; environment credentials bootstrap only."""
+
+    __tablename__ = "mail_ui_administrator"
+    id: int = Field(default=1, primary_key=True)
+    username: str = Field(max_length=64)
+    password_hash: str = Field(max_length=256)
+    updated_at: datetime = Field(default_factory=_utcnow_naive)
+
+
+class IdentityAdminEvent(SQLModel, table=True):
+    """Service-wide administrative audit, retained independently of mailbox lifecycle."""
+
+    __tablename__ = "identity_admin_events"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    actor: str = Field(max_length=128)
+    action: str = Field(max_length=64)
+    target: str = Field(max_length=256)
+    detail: str = Field(default="")
+    created_at: datetime = Field(default_factory=_utcnow_naive, index=True)
+
+
 class MailUISessionRecord(SQLModel, table=True):
     """Server-side revocation record for an issued human Mail UI session."""
 

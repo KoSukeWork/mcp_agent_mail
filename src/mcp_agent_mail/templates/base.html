@@ -2078,6 +2078,8 @@
             {% block header_actions %}{% endblock %}
 
             {% if mail_ui_username is defined and mail_ui_username() %}
+            <a href="/mail/admin/identity" class="h-9 px-3 inline-flex items-center rounded-lg text-sm font-semibold"
+               aria-label="{{ _('Identity administration') }}">{{ _('Identity administration') }}</a>
             <form method="post" action="/mail/logout" class="inline-flex">
               <input type="hidden" name="csrf_token" value="{{ mail_ui_csrf() if mail_ui_csrf is defined else '' }}">
               <button type="submit"

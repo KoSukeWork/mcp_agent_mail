@@ -19,6 +19,7 @@ from .db import ensure_schema, get_immediate_session, get_session
 from .models import (
     Agent,
     AgentConversationBinding,
+    IdentityAdminEvent,
     IdentityConfirmationRequest,
     MailboxEvent,
     McpClientPrincipal,
@@ -193,7 +194,9 @@ async def authenticate_client_principal(
                 "UNTRUSTED_CONVERSATION_CONTEXT",
                 "The MCP client credential does not match the enrolled identity.",
             )
-        desired_scopes = list(dict.fromkeys([*principal.scopes, *desired_scopes]))
+        # Bootstrap applies only at enrollment; a later administrator revocation
+        # must not be silently undone by an old environment setting.
+        desired_scopes = list(dict.fromkeys([*principal.scopes, "mailbox.identity.self"]))
         principal.last_authenticated_at = now
         if credentials.client_label and principal.display_label != credentials.client_label:
             principal.display_label = credentials.client_label
@@ -546,13 +549,21 @@ async def request_identity_recovery(
     principal = await authenticate_client_principal(credentials, allow_enrollment=True)
     if principal.id is None:
         raise ValueError("MCP client principal must have an id before requesting recovery.")
-    if "mailbox.identity.admin" not in principal.scopes:
-        raise ConversationIdentityError(
-            "IDENTITY_TRANSFER_CONFIRMATION_REQUIRED",
-            "Agent identity recovery requires a client principal with mailbox.identity.admin authority.",
-        )
     now = _utcnow_naive()
-    async with get_session() as session:
+    async with get_immediate_session() as session:
+        active_requests = (await session.execute(select(IdentityConfirmationRequest).where(
+            IdentityConfirmationRequest.requesting_principal_id == principal.id,
+            IdentityConfirmationRequest.status == "pending",
+            IdentityConfirmationRequest.expires_at > now,
+        ))).scalars().all()
+        for pending in active_requests:
+            if (pending.action == "recover" and pending.agent_id == agent.id
+                    and pending.target_conversation_binding_hash == credentials.conversation_hash):
+                # Recovery approval uses the web session, so no challenge needs
+                # to be recovered or returned on an idempotent retry.
+                return PendingIdentityTransfer(request=pending, challenge="")
+        if len(active_requests) >= 20:
+            raise ConversationIdentityError("TOO_MANY_REQUESTS", "Wait for pending identity requests to be reviewed or expire.")
         current_agent = await session.get(Agent, agent.id)
         if current_agent is None or current_agent.project_id != project.id:
             raise ConversationIdentityError(
@@ -574,7 +585,7 @@ async def request_identity_recovery(
         ):
             raise ConversationIdentityError(
                 "IDENTITY_BINDING_CONFLICT",
-                "This administrator conversation already owns the requested Agent identity.",
+                "This conversation already owns the requested Agent identity.",
             )
         target_result = await session.execute(
             select(AgentConversationBinding).where(
@@ -587,7 +598,7 @@ async def request_identity_recovery(
         if target_result.scalars().first() is not None:
             raise ConversationIdentityError(
                 "IDENTITY_BINDING_CONFLICT",
-                "This administrator conversation already owns another active Agent identity in the mailbox.",
+                "This conversation already owns another active Agent identity in the mailbox.",
             )
         challenge = secrets.token_urlsafe(32)
         request = IdentityConfirmationRequest(
@@ -664,19 +675,31 @@ async def decide_identity_transfer(
     challenge: str,
     *,
     approve: bool,
+    web_admin: bool = False,
 ) -> ResolvedConversationIdentity | None:
     """Consume a browser/native confirmation and atomically transfer ownership."""
     await ensure_schema()
+    administrator = None
+    if web_admin:
+        from .ui_auth import current_mail_ui_session, mail_ui_session_is_active
+
+        administrator = current_mail_ui_session()
+        if administrator is None or not await mail_ui_session_is_active(administrator):
+            raise ConversationIdentityError("AUTHENTICATION_REQUIRED", "A logged-in web administrator is required.")
     challenge_hash = hashlib.sha256(challenge.encode("utf-8")).hexdigest()
     now = _utcnow_naive()
     async with get_immediate_session() as session:
+        if administrator is not None:
+            from .ui_auth import require_current_admin_transaction
+
+            await require_current_admin_transaction(session)
         result = await session.execute(
             select(IdentityConfirmationRequest).where(
                 IdentityConfirmationRequest.request_uid == request_uid
             )
         )
         request = result.scalars().first()
-        if request is None or not hmac.compare_digest(request.challenge_hash, challenge_hash):
+        if request is None or (administrator is None and not hmac.compare_digest(request.challenge_hash, challenge_hash)):
             raise ConversationIdentityError(
                 "IDENTITY_CONFIRMATION_EXPIRED",
                 "The identity confirmation request is invalid or no longer available.",
@@ -691,10 +714,21 @@ async def decide_identity_transfer(
                 "IDENTITY_CONFIRMATION_EXPIRED",
                 "The identity confirmation request is no longer pending.",
             )
+        # A recovery challenge confirms possession of the request, not authority.
+        # Recovery always requires the authenticated human administrator.
+        if request.action == "recover" and administrator is None:
+            raise ConversationIdentityError("AUTHENTICATION_REQUIRED", "Approve recovery in the web administration page.")
+        if administrator is not None:
+            session.add(IdentityAdminEvent(
+                actor=administrator.username,
+                action="approve_request" if approve else "deny_request",
+                target=request.request_uid,
+                detail=f"action={request.action};agent_id={request.agent_id};principal_id={request.requesting_principal_id}",
+            ))
         if not approve:
             request.status = "denied"
             request.decided_at = now
-            request.decided_by_principal_id = request.requesting_principal_id
+            request.decided_by_principal_id = None if administrator else request.requesting_principal_id
             session.add(request)
             session.add(
                 MailboxEvent(
@@ -737,12 +771,12 @@ async def decide_identity_transfer(
             and source.agent_id == agent.id
             and source.generation == request.expected_binding_generation
         )
-        is_admin_recovery = request.action == "recover" and "mailbox.identity.admin" in principal.scopes
+        is_admin_recovery = request.action == "recover" and administrator is not None
         transfer_is_authorized = bool(
             request.action == "transfer"
             and source_is_current
             and source is not None
-            and source.client_principal_id == principal.id
+            and (source.client_principal_id == principal.id or administrator is not None)
         )
         recovery_is_authorized = bool(is_admin_recovery and (source is None or source_is_current))
         if (
@@ -800,7 +834,7 @@ async def decide_identity_transfer(
             agent.service_credential_rotated_at = now
         request.status = "consumed"
         request.decided_at = now
-        request.decided_by_principal_id = principal.id
+        request.decided_by_principal_id = None if administrator else principal.id
         session.add(target)
         session.add(agent)
         session.add(request)
@@ -924,3 +958,108 @@ async def get_identity_confirmation_status(
             await session.commit()
             await session.refresh(request)
         return request
+
+
+async def administer_identity(action: str, target_id: int) -> None:
+    """Apply a web administrator's explicit action and audit it atomically."""
+    from .ui_auth import current_mail_ui_session, mail_ui_session_is_active, require_current_admin_transaction
+
+    administrator = current_mail_ui_session()
+    if administrator is None or not await mail_ui_session_is_active(administrator):
+        raise ConversationIdentityError("AUTHENTICATION_REQUIRED", "A logged-in web administrator is required.")
+    now = _utcnow_naive()
+    async with get_immediate_session() as session:
+        await require_current_admin_transaction(session)
+        affected = 0
+        if action == "revoke_binding":
+            binding = await session.get(AgentConversationBinding, target_id)
+            if binding is None:
+                raise ConversationIdentityError("NOT_FOUND", "Binding not found.")
+            bindings = [binding] if binding.status == "active" else []
+        elif action in {"revoke_client", "restore_client", "grant_admin", "revoke_admin"}:
+            principal = await session.get(McpClientPrincipal, target_id)
+            if principal is None:
+                raise ConversationIdentityError("NOT_FOUND", "Client not found.")
+            bindings = []
+            if action == "revoke_client":
+                principal.status = "revoked"
+                principal.revoked_at = now
+                principal.revocation_reason = "revoked_by_web_administrator"
+                rows = await session.execute(select(AgentConversationBinding).where(
+                    AgentConversationBinding.client_principal_id == target_id,
+                    AgentConversationBinding.status == "active",
+                ))
+                bindings = list(rows.scalars().all())
+                pending = await session.execute(select(IdentityConfirmationRequest).where(
+                    IdentityConfirmationRequest.requesting_principal_id == target_id,
+                    IdentityConfirmationRequest.status == "pending",
+                ))
+                for request in pending.scalars():
+                    request.status = "denied"
+                    request.decided_at = now
+                    session.add(request)
+            elif action == "restore_client":
+                principal.status = "active"
+                principal.revoked_at = None
+                principal.revocation_reason = None
+            else:
+                if principal.status != "active":
+                    raise ConversationIdentityError("CLIENT_PRINCIPAL_REVOKED", "Restore the client before changing its permissions.")
+                principal.scopes = [scope for scope in principal.scopes if scope != "mailbox.identity.admin"]
+                if action == "grant_admin":
+                    principal.scopes = [*principal.scopes, "mailbox.identity.admin"]
+            session.add(principal)
+        else:
+            raise ConversationIdentityError("INVALID_ACTION", "Unknown identity administration action.")
+        for binding in bindings:
+            binding.status = "revoked"
+            binding.revoked_at = now
+            binding.revocation_reason = "revoked_by_web_administrator"
+            agent = await session.get(Agent, binding.agent_id)
+            if agent is not None and agent.binding_generation == binding.generation:
+                agent.binding_generation += 1
+                session.add(agent)
+            session.add(binding)
+            affected += 1
+        session.add(IdentityAdminEvent(
+            actor=administrator.username, action=action, target=str(target_id),
+            detail=f"bindings_revoked={affected}",
+        ))
+        await session.commit()
+
+
+async def identity_admin_snapshot(page: int = 1) -> dict[str, Any]:
+    """Return bounded, secret-free pages for the authenticated management UI."""
+    offset = (page - 1) * 100
+    async with get_session() as session:
+        clients = (await session.execute(select(McpClientPrincipal).order_by(cast(Any, McpClientPrincipal.id)).offset(offset).limit(100))).scalars().all()
+        bindings = (await session.execute(
+            select(AgentConversationBinding, Agent.name, Project.human_key, McpClientPrincipal.display_label)
+            .join(Agent, cast(Any, Agent.id == AgentConversationBinding.agent_id))
+            .join(Project, cast(Any, Project.id == AgentConversationBinding.project_id))
+            .join(McpClientPrincipal, cast(Any, McpClientPrincipal.id == AgentConversationBinding.client_principal_id))
+            .order_by(cast(Any, AgentConversationBinding.id).desc()).offset(offset).limit(100)
+        )).all()
+        requests = (await session.execute(
+            select(IdentityConfirmationRequest, Agent.name, Project.human_key, McpClientPrincipal.display_label)
+            .join(Agent, cast(Any, Agent.id == IdentityConfirmationRequest.agent_id))
+            .join(Project, cast(Any, Project.id == IdentityConfirmationRequest.project_id))
+            .join(McpClientPrincipal, cast(Any, McpClientPrincipal.id == IdentityConfirmationRequest.requesting_principal_id))
+            .where(IdentityConfirmationRequest.status == "pending", IdentityConfirmationRequest.expires_at > _utcnow_naive())
+            .order_by(cast(Any, IdentityConfirmationRequest.id).desc()).offset(offset).limit(100)
+        )).all()
+        events = (await session.execute(select(IdentityAdminEvent).order_by(cast(Any, IdentityAdminEvent.id).desc()).offset(offset).limit(100))).scalars().all()
+        return {
+            "page": page,
+            "has_more": any(len(rows) == 100 for rows in (clients, bindings, requests, events)),
+            "clients": [{"id": p.id, "uid": p.client_uid, "label": p.display_label,
+                         "status": p.status, "scopes": p.scopes, "last_seen": p.last_authenticated_at} for p in clients],
+            "bindings": [{"id": b.id, "agent": name, "project": project, "client": label,
+                          "client_id": b.client_principal_id, "status": b.status, "generation": b.generation,
+                          "last_seen": b.last_seen_at} for b, name, project, label in bindings],
+            "requests": [{"uid": r.request_uid, "action": r.action, "agent": name, "project": project,
+                          "client": label, "client_id": r.requesting_principal_id,
+                          "generation": r.expected_binding_generation, "expires": r.expires_at} for r, name, project, label in requests],
+            "events": [{"actor": e.actor, "action": e.action, "target": e.target,
+                        "detail": e.detail, "created": e.created_at} for e in events],
+        }

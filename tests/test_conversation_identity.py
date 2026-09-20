@@ -790,7 +790,7 @@ async def test_temporary_trash_suspends_status_and_purge_removes_identity_record
 
 
 @pytest.mark.asyncio
-async def test_identity_admin_can_recover_agent_from_another_client(isolated_env, monkeypatch):
+async def test_mcp_admin_cannot_self_approve_recovery(isolated_env, monkeypatch):
     project, agent = await create_project_and_agent()
     old_credentials = credentials()
     await bind_conversation_identity(project, agent, old_credentials, allow_client_enrollment=True)
@@ -833,21 +833,32 @@ async def test_identity_admin_can_recover_agent_from_another_client(isolated_env
     assert details.status_code == 200
     assert details.json()["action"] == "recover"
 
-    recovered = await decide_identity_transfer(
-        pending.request.request_uid,
-        pending.challenge,
-        approve=True,
-    )
-
-    assert recovered is not None
-    assert recovered.principal.client_uid == admin_credentials.client_uid
-    assert recovered.agent.id == agent.id
-    assert recovered.agent.binding_generation == 2
-    assert recovered.agent.service_credential_hash is None
-    assert recovered.agent.service_credential_version == 2
-    with pytest.raises(ConversationIdentityError) as old_error:
-        await resolve_conversation_identity(project, old_credentials)
-    assert old_error.value.error_type == "IDENTITY_SESSION_REVOKED"
-    current = await resolve_conversation_identity(project, admin_credentials)
+    # Even an MCP admin and possession of the challenge cannot self-approve
+    # recovery. Human web authentication is required; HTTP coverage tests it.
+    with pytest.raises(ConversationIdentityError, match="web administration"):
+        await decide_identity_transfer(pending.request.request_uid, pending.challenge, approve=True)
+    current = await resolve_conversation_identity(project, old_credentials)
     assert current is not None
     assert current.agent.id == agent.id
+
+
+@pytest.mark.asyncio
+async def test_recovery_tool_accepts_ordinary_adapter_without_confirmation_capability(isolated_env):
+    project, agent = await create_project_and_agent()
+    server = build_mcp_server()
+    meta = identity_meta()
+    identity = meta[IDENTITY_META_KEY]
+    assert isinstance(identity, dict)
+    identity["capabilities"] = []
+    async with Client(server) as client:
+        first = structured_result(await client.session.call_tool(
+            "recover_agent_identity", {"project_key": project.human_key, "agent_name": agent.name}, meta=meta,
+        ))
+        second = structured_result(await client.session.call_tool(
+            "recover_agent_identity", {"project_key": project.human_key, "agent_name": agent.name}, meta=meta,
+        ))
+        assert first["status"] == "pending"
+        assert first["approval_path"] == "/mail/admin/identity"
+        assert first["confirmation_request_id"] == second["confirmation_request_id"]
+        assert "_client_action" not in first
+        assert "challenge" not in str(first)

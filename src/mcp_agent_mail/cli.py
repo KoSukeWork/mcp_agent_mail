@@ -4798,6 +4798,21 @@ def identity_list_clients() -> None:
     console.print(table)
 
 
+@identity_app.command("reset-web-admin")
+def identity_reset_web_admin() -> None:
+    """Emergency reset of the web administrator; invalidates all browser sessions."""
+    from .ui_auth import reset_web_administrator
+
+    username = typer.prompt("New administrator username", default="operator")
+    password = typer.prompt("New password (at least 12 characters)", hide_input=True, confirmation_prompt=True)
+    try:
+        asyncio.run(reset_web_administrator(username.strip(), password, actor="local-cli"))
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(2) from exc
+    console.print("[green]Web administrator reset. All previous browser sessions revoked. No restart required.[/green]")
+
+
 async def _set_identity_admin_scope(client_uid: str, *, enabled: bool) -> McpClientPrincipal:
     await ensure_schema()
     async with get_immediate_session() as session:

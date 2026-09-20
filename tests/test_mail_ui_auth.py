@@ -38,6 +38,128 @@ _RPC_HEALTH = {
 }
 
 
+@pytest.mark.asyncio
+async def test_web_admin_recovers_identity_without_mcp_admin_grant(isolated_env, monkeypatch):
+    from mcp_agent_mail.identity import (
+        ClientConversationCredentials,
+        ConversationIdentityError,
+        bind_conversation_identity,
+        decide_identity_transfer,
+        request_identity_recovery,
+        resolve_conversation_identity,
+    )
+    from mcp_agent_mail.models import Agent, IdentityAdminEvent, McpClientPrincipal, Project
+
+    client, _settings = await _build_client(monkeypatch)
+    async with get_session() as session:
+        project = Project(slug="web-recovery", human_key="/web-recovery")
+        session.add(project)
+        await session.commit()
+        await session.refresh(project)
+        agent = Agent(project_id=project.id, name="SilverEagle", program="codex", model="test")
+        session.add(agent)
+        await session.commit()
+        await session.refresh(agent)
+    old = ClientConversationCredentials("old-client-00000001", "A" * 43, "old-conversation-00001", "Old laptop", False)
+    new = ClientConversationCredentials("new-client-00000001", "B" * 43, "new-conversation-00001", "<script>evil()</script>", False)
+    await bind_conversation_identity(project, agent, old, allow_client_enrollment=True)
+    pending = await request_identity_recovery(project, agent, new, ttl_seconds=300)
+    with pytest.raises(ConversationIdentityError):
+        await decide_identity_transfer(pending.request.request_uid, pending.challenge, approve=True)
+    with pytest.raises(ConversationIdentityError):
+        await decide_identity_transfer(pending.request.request_uid, "", approve=True, web_admin=True)
+
+    async with client:
+        payload = {"action": "approve_request", "target": pending.request.request_uid, "password": "ui-secret-ok"}
+        anonymous = await client.post("/mail/api/admin/identity", json=payload)
+        assert anonymous.status_code == 401
+        await _sign_in(client)
+        page = await client.get("/mail/admin/identity")
+        assert page.status_code == 200
+        assert pending.request.request_uid in page.text
+        assert "<script>evil()</script>" not in page.text
+        assert new.client_secret not in page.text
+        assert new.credential_hash not in page.text
+        csrf_match = _CSRF_META_RE.search(page.text)
+        assert csrf_match is not None
+        headers = {"Origin": "http://test", "X-CSRF-Token": csrf_match.group(1)}
+        assert (await client.post("/mail/api/admin/identity", json=payload)).status_code == 403
+        assert (await client.post("/mail/api/admin/identity", json=payload, headers={**headers, "Origin": "http://evil.test"})).status_code == 403
+        assert (await client.post("/mail/api/admin/identity", json={**payload, "password": "wrong"}, headers=headers)).status_code == 403
+        approved = await client.post("/mail/api/admin/identity", json=payload, headers=headers)
+        assert approved.status_code == 200, approved.text
+        assert (await client.post("/mail/api/admin/identity", json=payload, headers=headers)).status_code == 409
+        current = await resolve_conversation_identity(project, new)
+        assert current is not None and current.agent.id == agent.id
+        assert current.binding.generation == 2
+        with pytest.raises(ConversationIdentityError):
+            await resolve_conversation_identity(project, old)
+        revoked = await client.post("/mail/api/admin/identity", json={
+            "action": "revoke_client", "target": current.principal.id, "password": "ui-secret-ok",
+        }, headers=headers)
+        assert revoked.status_code == 200, revoked.text
+        with pytest.raises(ConversationIdentityError, match="revoked"):
+            await resolve_conversation_identity(project, new)
+        restored = await client.post("/mail/api/admin/identity", json={
+            "action": "restore_client", "target": current.principal.id, "password": "ui-secret-ok",
+        }, headers=headers)
+        assert restored.status_code == 200
+        with pytest.raises(ConversationIdentityError, match="no longer owns"):
+            await resolve_conversation_identity(project, new)
+    async with get_session() as session:
+        principal = await session.get(McpClientPrincipal, current.principal.id)
+        assert principal is not None and principal.scopes == ["mailbox.identity.self"]
+        audit = (await session.execute(select(IdentityAdminEvent))).scalars().all()
+        assert {e.action for e in audit} == {"approve_request", "revoke_client", "restore_client"}
+        assert all(e.actor == "operator" for e in audit)
+
+
+@pytest.mark.asyncio
+async def test_web_admin_account_change_persists_and_cli_reset_invalidates_sessions(isolated_env, monkeypatch):
+    from mcp_agent_mail.ui_auth import reset_web_administrator
+
+    client, settings = await _build_client(monkeypatch)
+    async with client:
+        await _sign_in(client)
+        old_cookie = client.cookies.get(MAIL_UI_SESSION_COOKIE)
+        page = await client.get("/mail/admin/identity")
+        csrf_match = _CSRF_META_RE.search(page.text)
+        assert csrf_match is not None
+        changed = await client.post("/mail/api/admin/identity", json={
+            "action": "reset_account", "username": "owner", "password": "ui-secret-ok",
+            "new_password": "new-password-long-enough",
+        }, headers={"Origin": "http://test", "X-CSRF-Token": csrf_match.group(1)})
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["redirect"] == "/mail/login"
+        stale = await client.get("/mail/admin/identity", headers={"Cookie": f"{MAIL_UI_SESSION_COOKIE}={old_cookie}"})
+        assert stale.status_code == 303
+
+    # New app process still reads the DB credentials, not the bootstrap env password.
+    async with AsyncClient(transport=ASGITransport(app=build_http_app(settings)), base_url="http://test") as restarted:
+        async def login(username, password):
+            page = await restarted.get("/mail/login")
+            return await restarted.post("/mail/login", data={
+                "username": username, "password": password, "csrf_token": _csrf_from_html(page.text),
+            }, headers={"Origin": "http://test"})
+        assert (await login("operator", "ui-secret-ok")).status_code != 303
+        assert (await login("owner", "new-password-long-enough")).status_code == 303
+        assert (await restarted.get("/mail/admin/identity")).status_code == 200
+        await reset_web_administrator("rescued", "emergency-password-long", actor="local-cli")
+        assert (await restarted.get("/mail/admin/identity")).status_code == 303
+        assert (await login("rescued", "emergency-password-long")).status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_identity_admin_requires_login_even_on_loopback_without_password(isolated_env, monkeypatch):
+    monkeypatch.delenv("MAIL_UI_PASSWORD", raising=False)
+    _config.clear_settings_cache()
+    await ensure_schema()
+    app = build_http_app(_config.get_settings())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
+        assert (await client.get("/mail/admin/identity")).status_code == 401
+        assert (await client.post("/mail/api/admin/identity", json={"action": "revoke_client", "target": 1, "password": ""})).status_code == 401
+
+
 def test_authenticated_ui_external_assets_are_versioned_and_integrity_checked() -> None:
     template = (
         Path(__file__).parents[1] / "src/mcp_agent_mail/templates/base.html"

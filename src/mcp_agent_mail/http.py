@@ -45,7 +45,13 @@ from .app import (
 )
 from .config import Settings, get_settings
 from .db import ensure_schema, get_session
-from .identity import ConversationIdentityError, decide_identity_transfer, get_identity_confirmation
+from .identity import (
+    ConversationIdentityError,
+    administer_identity,
+    decide_identity_transfer,
+    get_identity_confirmation,
+    identity_admin_snapshot,
+)
 from .localization import (
     INTERFACE_LOCALE_COOKIE,
     get_interface_locale,
@@ -78,6 +84,7 @@ from .ui_auth import (
     issue_mail_ui_session,
     new_login_csrf_token,
     origin_is_same_site,
+    reset_web_administrator,
     revoke_mail_ui_session,
     sanitize_mail_next_path,
     set_login_csrf_cookie,
@@ -2504,7 +2511,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             next_path = sanitize_mail_next_path(form.get("next", "/mail"))
             csrf_token = form.get("csrf_token", "")
             csrf_ok = verify_login_csrf(request, csrf_token)
-            credentials_ok = verify_mail_ui_credentials(settings, username, password)
+            credentials_ok = await asyncio.to_thread(verify_mail_ui_credentials, settings, username, password)
             if not csrf_ok or not credentials_ok:
                 if limiter is not None:
                     try:
@@ -2537,7 +2544,7 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
                     redirect,
                     request=request,
                     settings=settings,
-                    username=(settings.http.mail_ui_username or "operator"),
+                    username=username.strip(),
                 )
             except Exception:
                 logging.error("Failed to persist Mail UI session", exc_info=True)
@@ -2549,6 +2556,69 @@ def build_http_app(settings: Settings, server=None) -> FastAPI:
             clear_login_csrf_cookie(redirect)
             redirect.headers["Cache-Control"] = "no-store"
             return redirect
+
+        @fastapi_app.get("/mail/admin/identity", response_class=HTMLResponse)
+        async def mail_identity_admin(page: int = 1) -> HTMLResponse:
+            if current_mail_ui_session() is None:
+                raise HTTPException(status_code=401, detail="Sign in as the web administrator.")
+            if not 1 <= page <= 100000:
+                raise HTTPException(status_code=400, detail="Invalid page.")
+            return await _render("mail_identity_admin.html", **await identity_admin_snapshot(page))
+
+        @fastapi_app.post("/mail/api/admin/identity")
+        async def mail_identity_admin_action(request: Request) -> Response:
+            administrator = current_mail_ui_session()
+            if administrator is None:
+                raise HTTPException(status_code=401, detail="Sign in as the web administrator.")
+            # Middleware already verifies the signed session, Origin and CSRF.
+            # Bound input size before parsing passwords and identifiers.
+            raw = bytearray()
+            async for chunk in request.stream():
+                raw.extend(chunk)
+                if len(raw) > 8192:
+                    raise HTTPException(status_code=413, detail="Request too large.")
+            try:
+                payload = json.loads(raw)
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise HTTPException(status_code=400, detail="Expected a JSON object.") from exc
+            if not isinstance(payload, dict) or not isinstance(payload.get("password"), str):
+                raise HTTPException(status_code=400, detail="Administrator password required.")
+            limiter = request.app.state.mail_ui_login_limiter
+            client_ip = request.client.host if request.client else "unknown"
+            if not await limiter.allow(client_ip):
+                raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
+            if not await asyncio.to_thread(verify_mail_ui_credentials, settings, administrator.username, payload["password"]):
+                await limiter.record_failure(client_ip)
+                raise HTTPException(status_code=403, detail="Incorrect administrator password.")
+            await limiter.record_success(client_ip)
+            action = payload.get("action")
+            if not isinstance(action, str):
+                raise HTTPException(status_code=400, detail="Action required.")
+            try:
+                if action in {"approve_request", "deny_request"}:
+                    uid = payload.get("target")
+                    if not isinstance(uid, str) or not 1 <= len(uid) <= 64:
+                        raise HTTPException(status_code=400, detail="Invalid request identifier.")
+                    await decide_identity_transfer(uid, "", approve=action == "approve_request", web_admin=True)
+                elif action == "reset_account":
+                    username = payload.get("username")
+                    password = payload.get("new_password")
+                    if not isinstance(username, str) or not isinstance(password, str):
+                        raise HTTPException(status_code=400, detail="New username and password required.")
+                    await reset_web_administrator(username.strip(), password, actor=administrator.username)
+                    response = JSONResponse({"success": True, "redirect": "/mail/login"})
+                    clear_mail_ui_session_cookie(response)
+                    return response
+                else:
+                    target_id = payload.get("target")
+                    if type(target_id) is not int or target_id < 1:
+                        raise HTTPException(status_code=400, detail="Invalid target identifier.")
+                    await administer_identity(action, target_id)
+            except ConversationIdentityError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return JSONResponse({"success": True})
 
         @fastapi_app.post("/mail/logout")
         async def mail_logout() -> Response:

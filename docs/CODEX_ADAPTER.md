@@ -105,6 +105,26 @@ The Agent registration token is the one returned when `SageBay` was created; it 
 
 If the old Agent registration token is unavailable, it cannot be recovered because the server stores only its verification hash. Either let the trusted task create a new Agent, or use the explicit administrator identity-recovery workflow.
 
+## Web administrator recovery (no shell access required)
+
+1. In the destination Codex task, call `recover_agent_identity(project_key=..., agent_name=...)` through the adapter. The task must not already own a different active Agent in that project. It receives a request ID; the operation is pending, not completed.
+2. Sign in to `/mail` with the web administrator account and open **Identity administration** (`/mail/admin/identity`). Match the request ID, project, Agent and requesting client with the requester. Client labels are self-declared.
+3. Choose **Approve recovery / transfer**, enter the current administrator password, and confirm. The old owner immediately loses access; the Agent and its mail remain intact. Requests expire after the configured confirmation TTL (default five minutes); submit again if expired.
+4. In the destination task, check `identity_confirmation_status` and then resume with `macro_start_session`. The target is captured from the authenticated request; administrators never need to type a conversation ID or handle a client secret.
+
+The same page manages client revocation, restoration, individual binding revocation and audit history. Restoring a client re-enables authentication only; recover its Agent explicitly to establish a new binding. Requests by a revoked client are cancelled.
+
+The web administrator can change the username/password on this page. A PBKDF2-SHA256 password hash is persisted in the database, overrides the initial environment credentials, and survives container updates. All browser sessions are signed out. Keep `MAIL_UI_SESSION_SECRET` configured.
+
+For emergency password recovery only, run on the server:
+
+```bash
+docker compose -f docker-compose.yaml exec agent-mail \
+  /app/.venv/bin/mcp-agent-mail identity reset-web-admin
+```
+
+The command prompts for the new username and password and invalidates old sessions without restarting the service. Normal identity management requires no shell access or `identity grant-admin` step.
+
 ## Troubleshooting
 
 - `CODEX_THREAD_ID` error: the adapter was launched outside a Codex task, the Codex host is too old, or the variable was explicitly removed from the child process. Do not hard-code one thread ID for multiple tasks.

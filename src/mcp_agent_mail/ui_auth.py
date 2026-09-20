@@ -32,8 +32,10 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.types import ASGIApp
 
 from .config import MAIL_UI_USERNAME_RE, Settings
-from .db import get_session
-from .models import MailUISessionRecord
+from .db import ensure_schema, get_immediate_session, get_session
+from .models import IdentityAdminEvent, MailUIAdministrator, MailUISessionRecord
+
+_current_administrator: ContextVar[MailUIAdministrator | None] = ContextVar("mail_ui_administrator", default=None)
 
 MAIL_UI_SESSION_COOKIE: Final = "agent_mail_ui_session"
 MAIL_UI_LOGIN_CSRF_COOKIE: Final = "agent_mail_ui_login_csrf"
@@ -348,7 +350,7 @@ def is_mail_logout_path(path: str) -> bool:
 def credentials_configured(settings: Settings) -> bool:
     """Return whether a human mail-UI password is configured."""
 
-    return bool(settings.http.mail_ui_password)
+    return _current_administrator.get() is not None or bool(settings.http.mail_ui_password)
 
 
 def current_mail_ui_username() -> str | None:
@@ -387,7 +389,8 @@ def session_signing_key(settings: Settings) -> bytes | None:
 
     explicit = (settings.http.mail_ui_session_secret or "").strip()
     username = _configured_username(settings)
-    password = settings.http.mail_ui_password or ""
+    administrator = _current_administrator.get()
+    password = administrator.password_hash if administrator else settings.http.mail_ui_password or ""
     if not explicit or not password:
         return None
     return hmac.new(
@@ -462,6 +465,13 @@ def verify_mail_ui_credentials(settings: Settings, username: str, password: str)
     """Constant-time comparison of the configured operator credentials."""
 
     expected_user = _configured_username(settings)
+    administrator = _current_administrator.get()
+    if administrator is not None:
+        if not password or len(password) > 1024:
+            return False
+        _, iterations, salt, digest = administrator.password_hash.split("$")
+        provided = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), int(iterations)).hex()
+        return _consteq(provided, digest) and _consteq(expected_user, username.strip())
     expected_password = settings.http.mail_ui_password or ""
     provided_user = username.strip()
     provided_password = password
@@ -477,9 +487,42 @@ def _session_id_hash(session_id: str) -> str:
     return hashlib.sha256(session_id.encode("ascii")).hexdigest()
 
 
+async def reset_web_administrator(username: str, password: str, *, actor: str) -> None:
+    """Persist new credentials and revoke every existing UI session, including this one."""
+    if not MAIL_UI_USERNAME_RE.fullmatch(username) or not 12 <= len(password) <= 1024:
+        raise ValueError("Use a valid username and a password of 12-1024 characters.")
+    salt = secrets.token_bytes(32)
+    digest = await asyncio.to_thread(hashlib.pbkdf2_hmac, "sha256", password.encode(), salt, 600_000)
+    encoded = f"pbkdf2_sha256$600000${salt.hex()}${digest.hex()}"
+    await ensure_schema()
+    async with get_immediate_session() as session:
+        administrator = await session.get(MailUIAdministrator, 1)
+        current_session = current_mail_ui_session()
+        if current_session is not None:
+            await require_current_admin_transaction(session)
+        if administrator is None:
+            administrator = MailUIAdministrator(username=username, password_hash=encoded)
+        else:
+            administrator.username = username
+            administrator.password_hash = encoded
+            administrator.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        session.add(administrator)
+        from sqlalchemy import update
+
+        await session.execute(update(MailUISessionRecord).where(
+            col(MailUISessionRecord.revoked_at).is_(None),
+        ).values(revoked_at=_now_ts()))
+        session.add(IdentityAdminEvent(actor=actor, action="reset_web_administrator", target=username))
+        await session.commit()
+
+
 async def _register_mail_ui_session(session: MailUISession) -> None:
     now = _now_ts()
-    async with get_session() as db_session:
+    async with get_immediate_session() as db_session:
+        stored = await db_session.get(MailUIAdministrator, 1)
+        expected = _current_administrator.get()
+        if (stored.password_hash if stored else None) != (expected.password_hash if expected else None):
+            raise ValueError("Administrator credentials changed during login. Sign in again.")
         await db_session.execute(
             delete(MailUISessionRecord).where(col(MailUISessionRecord.expires_at) <= now)
         )
@@ -492,6 +535,22 @@ async def _register_mail_ui_session(session: MailUISession) -> None:
             )
         )
         await db_session.commit()
+
+
+async def require_current_admin_transaction(db_session: Any) -> None:
+    """Recheck administrator revocation under the same write transaction as an action."""
+    current = current_mail_ui_session()
+    if current is None:
+        raise ValueError("Administrator login required.")
+    record = await db_session.get(MailUISessionRecord, _session_id_hash(current.session_id))
+    stored = await db_session.get(MailUIAdministrator, 1)
+    expected = _current_administrator.get()
+    if (
+        record is None or record.revoked_at is not None or record.expires_at <= _now_ts()
+        or record.username != current.username
+        or (stored.password_hash if stored else None) != (expected.password_hash if expected else None)
+    ):
+        raise ValueError("Administrator session changed. Sign in again.")
 
 
 async def mail_ui_session_is_active(session: MailUISession) -> bool:
@@ -629,6 +688,20 @@ class MailUIAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if not is_mail_ui_path(request.url.path):
             return await call_next(request)
+
+        try:
+            await ensure_schema()
+            async with get_session() as db_session:
+                administrator = await db_session.get(MailUIAdministrator, 1)
+        except Exception:
+            return _no_store(JSONResponse({"detail": "Administrator authentication unavailable"}, status_code=503))
+        admin_token = _current_administrator.set(administrator)
+        try:
+            return await self._dispatch_authenticated(request, call_next)
+        finally:
+            _current_administrator.reset(admin_token)
+
+    async def _dispatch_authenticated(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
 
         secret = session_signing_key(self._settings)
         session = None
@@ -789,6 +862,9 @@ def _is_localhost_host(host: str) -> bool:
 
 
 def _configured_username(settings: Settings) -> str:
+    administrator = _current_administrator.get()
+    if administrator is not None:
+        return administrator.username
     return (settings.http.mail_ui_username or "operator").strip() or "operator"
 
 

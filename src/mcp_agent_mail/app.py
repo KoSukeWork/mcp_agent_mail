@@ -7067,8 +7067,8 @@ def build_mcp_server() -> FastMCP:
     @mcp.tool(
         name="recover_agent_identity",
         description=(
-            "Request administrator recovery of an existing Agent into this conversation. "
-            "Requires mailbox.identity.admin authority and explicit elicitation or browser confirmation."
+            "Request recovery of an existing Agent into this conversation. "
+            "Any authenticated client may apply; a logged-in human web administrator must approve in /mail/admin/identity."
         ),
     )
     @_instrument_tool(
@@ -7103,59 +7103,12 @@ def build_mcp_server() -> FastMCP:
         except ConversationIdentityError as exc:
             raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
 
-        capabilities = getattr(getattr(ctx.session, "client_params", None), "capabilities", None)
-        if getattr(capabilities, "elicitation", None) is not None:
-            choice = await ctx.elicit(
-                (
-                    f"Recover Agent {agent.name} in {project.human_key} into this administrator conversation? "
-                    "Any previously bound conversation will immediately lose permission to act as this Agent."
-                ),
-                ["Approve recovery", "Deny"],
-            )
-            approved = getattr(choice, "action", None) == "accept" and getattr(choice, "data", None) == "Approve recovery"
-            try:
-                resolved = await decide_identity_transfer(
-                    pending.request.request_uid,
-                    pending.challenge,
-                    approve=approved,
-                )
-            except ConversationIdentityError as exc:
-                raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
-            if resolved is None:
-                return {
-                    "status": "denied",
-                    "confirmation_request_id": pending.request.request_uid,
-                    "agent_name": agent.name,
-                }
-            _bind_session_agent(ctx, project, resolved.agent)
-            return {
-                "status": "recovered",
-                "confirmation_request_id": pending.request.request_uid,
-                "agent": _agent_to_dict(resolved.agent),
-                "binding_generation": resolved.binding.generation,
-            }
-
-        if not settings.identity_browser_confirmation_enabled or not credentials.browser_confirmation:
-            return {
-                "status": "pending",
-                "confirmation_request_id": pending.request.request_uid,
-                "agent_name": agent.name,
-                "error": "IDENTITY_TRANSFER_CONFIRMATION_REQUIRED",
-                "message": "This MCP client must support native elicitation or browser confirmation.",
-            }
-        confirmation_url = (
-            f"{settings.identity_confirmation_base_url}/identity/confirm/"
-            f"{pending.request.request_uid}#challenge={pending.challenge}"
-        )
         return {
             "status": "pending",
             "confirmation_request_id": pending.request.request_uid,
             "agent_name": agent.name,
-            "_client_action": {
-                "type": "open_browser",
-                "url": confirmation_url,
-                "sensitive": True,
-            },
+            "approval_path": "/mail/admin/identity",
+            "message": "Ask the web administrator to approve this request. No CLI grant or client admin scope is required.",
         }
 
     @mcp.tool(name="identity_confirmation_status")

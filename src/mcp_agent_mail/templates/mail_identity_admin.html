@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}{{ _('Identity administration') }} · Agent Mail{% endblock %}
+{% block content %}
+<style nonce="{{ csp_nonce }}">
+  .identity-admin {max-width:1200px;margin:2rem auto;padding:0 1rem}
+  .identity-admin h1 {font-size:1.8rem;font-weight:700}
+  .identity-admin h2 {font-size:1.2rem;font-weight:650;margin:1.7rem 0 .8rem}
+  .identity-admin p {margin:.6rem 0;line-height:1.6}
+  .identity-admin .table-scroll {overflow-x:auto;border:1px solid #64748b55;border-radius:.7rem}
+  .identity-admin table {width:100%;border-collapse:collapse;font-size:.9rem}
+  .identity-admin th,.identity-admin td {text-align:left;padding:.8rem;border-bottom:1px solid #64748b33;vertical-align:top}
+  .identity-admin code {overflow-wrap:anywhere}
+  .identity-admin button,.identity-admin .page-link {border:1px solid #64748b88;border-radius:.4rem;padding:.4rem .7rem;margin:.2rem;cursor:pointer}
+  .identity-admin button:disabled {opacity:.5;cursor:wait}
+  .identity-admin input {display:block;padding:.6rem;border:1px solid #64748b;border-radius:.4rem;background:transparent;width:min(100%,28rem);margin:.4rem 0 1rem}
+  .identity-admin .muted {font-size:.85rem;color:#64748b}
+  .identity-admin .action-form {padding:1rem;border:1px solid #64748b55;border-radius:.7rem;margin-top:1rem}
+  #admin-status {white-space:pre-wrap;font-weight:600}
+</style>
+<main class="identity-admin">
+  <h1>{{ _('Identity administration') }}</h1>
+  <p>{{ _('Manage trusted clients and Agent ownership. Mail and Agent records are preserved.') }}</p>
+  <p role="status" id="admin-status" aria-live="polite"></p>
+
+  <h2>{{ _('Pending identity requests') }}</h2>
+  <p>{{ _('Check the request ID with the requester. Client labels are self-declared, not proof of identity.') }}</p>
+  <div class="table-scroll"><table>
+    <thead><tr><th>{{ _('Request') }}</th><th>{{ _('Agent / Project') }}</th><th>{{ _('Client') }}</th><th>{{ _('Expires (UTC)') }}</th><th>{{ _('Actions') }}</th></tr></thead>
+    <tbody>{% for r in requests %}<tr>
+      <td><code>{{ r.uid }}</code><br>{{ r.action }}</td>
+      <td>{{ r.agent }}<br><code>{{ r.project }}</code><br>{{ _('Generation') }} {{ r.generation }}</td>
+      <td>{{ r.client }}<br>#{{ r.client_id }}</td><td>{{ r.expires }}</td>
+      <td><button type="button" data-action="approve_request" data-target="{{ r.uid }}" data-label="{{ r.agent }} · {{ r.project }} · {{ r.client }} · {{ r.uid }}">{{ _('Approve recovery / transfer') }}</button>
+      <button type="button" data-action="deny_request" data-target="{{ r.uid }}" data-label="{{ r.agent }} · {{ r.uid }}">{{ _('Deny request') }}</button></td>
+    </tr>{% else %}<tr><td colspan="5">{{ _('No records on this page.') }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+  <h2>{{ _('Trusted clients') }}</h2>
+  <p>{{ _('Revoking a client invalidates its active bindings and pending requests. Restoring a client allows authentication again; old bindings remain revoked.') }}</p>
+  <div class="table-scroll"><table>
+    <thead><tr><th>{{ _('Client') }}</th><th>{{ _('Status') }}</th><th>{{ _('Last seen (UTC)') }}</th><th>{{ _('Actions') }}</th></tr></thead>
+    <tbody>{% for c in clients %}<tr>
+      <td>#{{ c.id }} · {{ c.label }}<br><code>{{ c.uid }}</code></td><td>{{ c.status }}</td><td>{{ c.last_seen }}</td>
+      <td>{% if c.status == 'active' %}<button type="button" data-action="revoke_client" data-target="{{ c.id }}" data-label="{{ c.label }} · {{ c.uid }}">{{ _('Revoke client') }}</button>
+      {% else %}<button type="button" data-action="restore_client" data-target="{{ c.id }}" data-label="{{ c.label }} · {{ c.uid }}">{{ _('Restore client') }}</button>{% endif %}</td>
+    </tr>{% else %}<tr><td colspan="4">{{ _('No records on this page.') }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+  <h2>{{ _('Conversation bindings') }}</h2>
+  <div class="table-scroll"><table>
+    <thead><tr><th>{{ _('Agent / Project') }}</th><th>{{ _('Client') }}</th><th>{{ _('Status') }}</th><th>{{ _('Generation') }}</th><th>{{ _('Actions') }}</th></tr></thead>
+    <tbody>{% for b in bindings %}<tr>
+      <td>#{{ b.id }} · {{ b.agent }}<br><code>{{ b.project }}</code></td><td>#{{ b.client_id }} · {{ b.client }}</td><td>{{ b.status }}</td><td>{{ b.generation }}</td>
+      <td>{% if b.status == 'active' %}<button type="button" data-action="revoke_binding" data-target="{{ b.id }}" data-label="{{ b.agent }} · {{ b.project }} · {{ b.client }}">{{ _('Revoke binding') }}</button>{% endif %}</td>
+    </tr>{% else %}<tr><td colspan="5">{{ _('No records on this page.') }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+  <form id="identity-action-form" class="action-form" hidden>
+    <p id="selected-action"></p>
+    <p>{{ _('Approval replaces the previous owner immediately. Revocation stops future access. Verify the selected target before continuing.') }}</p>
+    <label for="admin-password">{{ _('Current administrator password') }}</label>
+    <input id="admin-password" type="password" autocomplete="current-password" maxlength="1024" required>
+    <button type="submit">{{ _('Confirm action') }}</button>
+    <button type="button" id="cancel-action">{{ _('Cancel') }}</button>
+  </form>
+
+  <h2>{{ _('Administration audit') }}</h2>
+  <div class="table-scroll"><table>
+    <thead><tr><th>UTC</th><th>{{ _('Administrator') }}</th><th>{{ _('Action') }}</th><th>{{ _('Target / Detail') }}</th></tr></thead>
+    <tbody>{% for e in events %}<tr><td>{{ e.created }}</td><td>{{ e.actor }}</td><td>{{ e.action }}</td><td><code>{{ e.target }}</code><br>{{ e.detail }}</td></tr>
+    {% else %}<tr><td colspan="4">{{ _('No records on this page.') }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p>{% if page > 1 %}<a class="page-link" href="?page={{ page - 1 }}">{{ _('Previous') }}</a>{% endif %}
+    {{ _('Page') }} {{ page }} {% if has_more %}<a class="page-link" href="?page={{ page + 1 }}">{{ _('Next') }}</a>{% endif %}</p>
+
+  <h2>{{ _('Administrator account') }}</h2>
+  <p>{{ _('Changing this account signs out all browser sessions. New credentials take effect immediately and survive container updates.') }}</p>
+  <form id="account-form" class="action-form">
+    <label for="account-username">{{ _('Username') }}</label>
+    <input id="account-username" autocomplete="username" maxlength="64" value="{{ mail_ui_username() }}" required>
+    <label for="account-current">{{ _('Current administrator password') }}</label>
+    <input id="account-current" type="password" autocomplete="current-password" maxlength="1024" required>
+    <label for="account-new">{{ _('New password (at least 12 characters)') }}</label>
+    <input id="account-new" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+    <label for="account-confirm">{{ _('Confirm new password') }}</label>
+    <input id="account-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+    <button type="submit">{{ _('Save administrator account') }}</button>
+  </form>
+</main>
+<script nonce="{{ csp_nonce }}">
+(() => {
+  const actionForm = document.getElementById('identity-action-form');
+  const status = document.getElementById('admin-status');
+  let selected = null;
+  let busy = false;
+  async function submit(payload) {
+    if (busy) return;
+    busy = true;
+    document.querySelectorAll('.identity-admin button').forEach(b => b.disabled = true);
+    status.textContent = '';
+    try {
+      const response = await fetch('/mail/api/admin/identity', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').content},
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || response.statusText);
+      location.assign(result.redirect || location.href);
+    } catch (error) {
+      status.textContent = error.message;
+      status.scrollIntoView({block:'center'});
+    } finally {
+      document.querySelectorAll('.identity-admin input[type="password"]').forEach(input => input.value = '');
+      document.querySelectorAll('.identity-admin button').forEach(b => b.disabled = false);
+      busy = false;
+    }
+  }
+  document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => {
+    selected = {action: button.dataset.action, target: button.dataset.action.endsWith('_request') ? button.dataset.target : Number(button.dataset.target)};
+    document.getElementById('selected-action').textContent = button.textContent + ': ' + button.dataset.label;
+    actionForm.hidden = false;
+    document.getElementById('admin-password').value = '';
+    actionForm.scrollIntoView({block:'center'});
+    document.getElementById('admin-password').focus();
+  }));
+  document.getElementById('cancel-action').addEventListener('click', () => {
+    selected = null; actionForm.hidden = true; document.getElementById('admin-password').value = '';
+  });
+  actionForm.addEventListener('submit', event => {
+    event.preventDefault();
+    if (selected) submit({...selected, password: document.getElementById('admin-password').value});
+  });
+  document.getElementById('account-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const password = document.getElementById('account-new');
+    const confirm = document.getElementById('account-confirm');
+    confirm.setCustomValidity(password.value === confirm.value ? '' : {{ _('Passwords do not match.') | tojson }});
+    if (!confirm.reportValidity()) return;
+    submit({action:'reset_account', username:document.getElementById('account-username').value,
+      password:document.getElementById('account-current').value, new_password:password.value});
+  });
+  document.getElementById('account-confirm').addEventListener('input', event => event.target.setCustomValidity(''));
+})();
+</script>
+{% endblock %}
