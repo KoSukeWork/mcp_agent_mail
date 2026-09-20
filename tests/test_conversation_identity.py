@@ -584,7 +584,10 @@ async def test_automatic_transfer_preserves_authority_boundaries(isolated_env, s
 
 
 @pytest.mark.asyncio
-async def test_streamable_http_preserves_trusted_conversation_metadata(isolated_env):
+async def test_streamable_http_preserves_trusted_conversation_metadata(isolated_env, monkeypatch):
+    monkeypatch.setenv("HTTP_BEARER_TOKEN", "test-client-display-transport")
+    monkeypatch.setenv("HTTP_RBAC_DEFAULT_ROLE", "writer")
+    clear_settings_cache()
     project, agent = await create_project_and_agent()
     await bind_conversation_identity(project, agent, credentials(), allow_client_enrollment=True)
     app = build_http_app(get_settings())
@@ -598,6 +601,11 @@ async def test_streamable_http_preserves_trusted_conversation_metadata(isolated_
             "_meta": identity_meta(),
         },
     }
+    display_meta = request["params"]["_meta"][IDENTITY_META_KEY]
+    assert isinstance(display_meta, dict)
+    display_meta.update({
+        "machine_name": "DESKTOP-TEST", "source_ip": "203.0.113.99",
+    })
 
     async with (
         app.router.lifespan_context(app),
@@ -605,7 +613,9 @@ async def test_streamable_http_preserves_trusted_conversation_metadata(isolated_
     ):
         response = await client.post(
             get_settings().http.path,
-            headers={"Accept": "application/json, text/event-stream"},
+            headers={"Accept": "application/json, text/event-stream", "X-Forwarded-For": "203.0.113.88",
+                     "Authorization": "Bearer test-client-display-transport",
+                     "User-Agent": "OpenAI File Downloader, XaiImageApiFetch/1.0"},
             json=request,
         )
 
@@ -616,6 +626,38 @@ async def test_streamable_http_preserves_trusted_conversation_metadata(isolated_
     assert result["bound"] is True
     assert result["binding_state"] == "active"
     assert result["agent"]["id"] == agent.id
+    async with get_session() as session:
+        principal = (await session.execute(select(McpClientPrincipal))).scalars().one()
+        assert principal.machine_name == "DESKTOP-TEST"
+        assert principal.last_source_ip == "127.0.0.1"
+
+
+@pytest.mark.asyncio
+async def test_client_display_metadata_updates_only_after_authentication(isolated_env):
+    await ensure_schema()
+    meta = RequestParams.Meta.model_validate(identity_meta())
+    parsed = parse_identity_metadata(meta, source_ip="2001:db8::1")
+    assert parsed is not None
+    await authenticate_client_principal(parsed, allow_enrollment=True)
+    raw = identity_meta()
+    display_meta = raw[IDENTITY_META_KEY]
+    assert isinstance(display_meta, dict)
+    display_meta.update({"machine_name": "Laptop\nA", "source_ip": "203.0.113.7"})
+    updated = parse_identity_metadata(RequestParams.Meta.model_validate(raw))
+    assert updated is not None
+    principal = await authenticate_client_principal(updated, allow_enrollment=False)
+    assert principal.machine_name == "LaptopA"
+    assert principal.last_source_ip == "2001:db8::1"
+    display_meta.update({"machine_name": "Impostor", "client_secret": "Z" * 43})
+    forged = parse_identity_metadata(RequestParams.Meta.model_validate(raw), source_ip="203.0.113.7")
+    assert forged is not None
+    with pytest.raises(ConversationIdentityError):
+        await authenticate_client_principal(forged, allow_enrollment=False)
+    async with get_session() as session:
+        stored = await session.get(McpClientPrincipal, principal.id)
+        assert stored is not None
+        assert stored.machine_name == "LaptopA"
+        assert stored.last_source_ip == "2001:db8::1"
 
 
 @pytest.mark.asyncio

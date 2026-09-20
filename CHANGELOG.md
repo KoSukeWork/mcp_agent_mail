@@ -22,6 +22,8 @@ Format: entries are organized by version in reverse chronological order. Each ve
 
 ### Agent Identity and Lifecycle
 
+- npm adapter 0.1.2 reports the computer hostname; the server records authenticated clients' transport-observed IP. The administrator client/request lists show these display-only fields and short client IDs; existing databases migrate without changing credentials or bindings.
+
 - Explicit Agent transfer/recovery within the same authenticated client completes without human confirmation. Cross-client and unowned identity recovery still require web administrator approval; revoked clients, occupied destinations, generation checks and audit trails remain enforced.
 
 - **npm adapter 0.1.1 startup fix** -- initialize without `CODEX_THREAD_ID`; resolve each tool call from Codex-owned `_meta.threadId`, never a cached task or model arguments. Missing/conflicting metadata fails closed without terminating the connection. Add interleaved-task and process-restart integration coverage; clarify that `--check` does not validate host task metadata.

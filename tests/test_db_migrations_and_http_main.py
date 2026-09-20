@@ -11,9 +11,25 @@ from sqlmodel import SQLModel
 
 from mcp_agent_mail import config as _config
 from mcp_agent_mail.app import build_mcp_server
-from mcp_agent_mail.db import _migrate_sqlite_project_lifecycle, ensure_schema
+from mcp_agent_mail.db import _migrate_sqlite_agent_identity, _migrate_sqlite_project_lifecycle, ensure_schema
 from mcp_agent_mail.http import build_http_app, main as http_main
 from mcp_agent_mail.models import Project
+
+
+def test_client_display_migration_preserves_existing_identity():
+    engine = create_engine("sqlite://")
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql("CREATE TABLE mcp_client_principals (id INTEGER PRIMARY KEY, client_uid TEXT, credential_hash TEXT)")
+            connection.exec_driver_sql("INSERT INTO mcp_client_principals VALUES (1, 'existing-client', 'unchanged-hash')")
+            connection.exec_driver_sql("CREATE TABLE agents (id INTEGER PRIMARY KEY, registration_token TEXT)")
+            _migrate_sqlite_agent_identity(connection)
+            _migrate_sqlite_agent_identity(connection)
+            assert connection.exec_driver_sql("SELECT * FROM mcp_client_principals").one() == (
+                1, "existing-client", "unchanged-hash", "", "",
+            )
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize("legacy", [True, False])
@@ -138,5 +154,4 @@ def test_readiness_ok_status(isolated_env):
 
     code = asyncio.run(_readiness_ok())
     assert code in (200, 503)
-
 

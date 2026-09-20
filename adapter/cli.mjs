@@ -2,7 +2,7 @@
 // STDIO is protocol-only. Never print configuration, identities or upstream errors.
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -18,7 +18,7 @@ const ACCOUNT = 'client-principal';
 const OPAQUE_ID = /^[A-Za-z0-9._~-]{16,256}$/;
 const SECRET = /^[A-Za-z0-9_-]{32,256}$/;
 const USER_AGENT = 'OpenAI File Downloader, XaiImageApiFetch/1.0';
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 
 export class AdapterError extends Error {}
 
@@ -188,7 +188,8 @@ export function injectIdentity(message, settings, identity) {
   if (message.method !== 'initialize' && thread) {
     meta[IDENTITY_META_KEY] = {
       version: 1, client_uid: identity.client_uid, client_secret: identity.client_secret,
-      conversation_uid: thread, client_label: settings.clientLabel, capabilities: [],
+      conversation_uid: thread, client_label: settings.clientLabel,
+      machine_name: hostname().trim().slice(0, 255), capabilities: [],
     };
   }
   return { ...message, params: { ...message.params, _meta: meta } };

@@ -890,6 +890,11 @@ def _migrate_sqlite_agent_identity(connection: Connection) -> None:
     """Add Agent binding and service-credential metadata without exposing secrets."""
     if connection.dialect.name != "sqlite":
         return
+    client_columns = {column["name"] for column in inspect(connection).get_columns("mcp_client_principals")}
+    for name, ddl in {"machine_name": "VARCHAR(255) NOT NULL DEFAULT ''",
+                      "last_source_ip": "VARCHAR(45) NOT NULL DEFAULT ''"}.items():
+        if name not in client_columns:
+            connection.exec_driver_sql(f"ALTER TABLE mcp_client_principals ADD COLUMN {name} {ddl}")
     columns = {column["name"] for column in inspect(connection).get_columns("agents")}
     definitions = {
         "binding_generation": "INTEGER NOT NULL DEFAULT 1 CHECK (binding_generation >= 1)",

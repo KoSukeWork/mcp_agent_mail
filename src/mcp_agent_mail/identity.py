@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import re
 import secrets
@@ -59,6 +60,8 @@ class ClientConversationCredentials:
     conversation_uid: str
     client_label: str
     browser_confirmation: bool
+    machine_name: str = ""
+    source_ip: str = ""
 
     @property
     def credential_hash(self) -> str:
@@ -83,7 +86,7 @@ class PendingIdentityTransfer:
     challenge: str
 
 
-def parse_identity_metadata(meta: Any) -> ClientConversationCredentials | None:
+def parse_identity_metadata(meta: Any, *, source_ip: str = "") -> ClientConversationCredentials | None:
     """Parse the namespaced request metadata without accepting tool arguments."""
     if meta is None:
         return None
@@ -119,12 +122,20 @@ def parse_identity_metadata(meta: Any) -> ClientConversationCredentials | None:
         )
     capabilities = raw.get("capabilities")
     browser_confirmation = isinstance(capabilities, list) and "browser_confirmation" in capabilities
+    machine_name = raw.get("machine_name")
+    machine_name = "".join(c for c in machine_name.strip() if c.isprintable())[:255] if isinstance(machine_name, str) else ""
+    try:
+        observed_ip = str(ipaddress.ip_address(source_ip)) if source_ip else ""
+    except ValueError:
+        observed_ip = ""
     return ClientConversationCredentials(
         client_uid=client_uid,
         client_secret=client_secret,
         conversation_uid=conversation_uid,
         client_label=client_label,
         browser_confirmation=browser_confirmation,
+        machine_name=machine_name,
+        source_ip=observed_ip,
     )
 
 
@@ -169,6 +180,8 @@ async def authenticate_client_principal(
                 principal_type="local_key",
                 credential_hash=credentials.credential_hash,
                 display_label=credentials.client_label,
+                machine_name=credentials.machine_name,
+                last_source_ip=credentials.source_ip,
                 scopes=desired_scopes,
                 last_authenticated_at=now,
             )
@@ -204,6 +217,10 @@ async def authenticate_client_principal(
         # must not be silently undone by an old environment setting.
         desired_scopes = list(dict.fromkeys([*principal.scopes, "mailbox.identity.self"]))
         principal.last_authenticated_at = now
+        if credentials.machine_name:
+            principal.machine_name = credentials.machine_name
+        if credentials.source_ip:
+            principal.last_source_ip = credentials.source_ip
         if credentials.client_label and principal.display_label != credentials.client_label:
             principal.display_label = credentials.client_label
         if principal.scopes != desired_scopes:
@@ -1166,7 +1183,7 @@ async def identity_admin_snapshot(page: int = 1) -> dict[str, Any]:
             .order_by(cast(Any, AgentConversationBinding.id).desc()).offset(offset).limit(100)
         )).all()
         requests = (await session.execute(
-            select(IdentityConfirmationRequest, Agent.name, Project.human_key, McpClientPrincipal.display_label)
+            select(IdentityConfirmationRequest, Agent.name, Project.human_key, McpClientPrincipal)
             .join(Agent, cast(Any, Agent.id == IdentityConfirmationRequest.agent_id))
             .join(Project, cast(Any, Project.id == IdentityConfirmationRequest.project_id))
             .join(McpClientPrincipal, cast(Any, McpClientPrincipal.id == IdentityConfirmationRequest.requesting_principal_id))
@@ -1180,13 +1197,15 @@ async def identity_admin_snapshot(page: int = 1) -> dict[str, Any]:
             "agents": [{"id": a.id, "name": a.name, "project": project,
                         "status": "retired" if a.retired_at else "active"} for a, project in agents],
             "clients": [{"id": p.id, "uid": p.client_uid, "label": p.display_label,
+                         "machine_name": p.machine_name, "source_ip": p.last_source_ip,
                          "status": p.status, "scopes": p.scopes, "last_seen": p.last_authenticated_at} for p in clients],
             "bindings": [{"id": b.id, "agent": name, "project": project, "client": label,
                           "client_id": b.client_principal_id, "status": b.status, "generation": b.generation,
                           "last_seen": b.last_seen_at} for b, name, project, label in bindings],
             "requests": [{"uid": r.request_uid, "action": r.action, "agent": name, "project": project,
-                          "client": label, "client_id": r.requesting_principal_id,
-                          "generation": r.expected_binding_generation, "expires": r.expires_at} for r, name, project, label in requests],
+                          "client": p.display_label, "client_id": r.requesting_principal_id,
+                          "client_uid": p.client_uid, "machine_name": p.machine_name, "source_ip": p.last_source_ip,
+                          "generation": r.expected_binding_generation, "expires": r.expires_at} for r, name, project, p in requests],
             "events": [{"actor": e.actor, "action": e.action, "target": e.target,
                         "detail": e.detail, "created": e.created_at} for e in events],
         }

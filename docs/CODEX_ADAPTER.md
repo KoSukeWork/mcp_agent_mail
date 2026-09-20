@@ -150,6 +150,14 @@ If the old Agent registration token is unavailable, it cannot be recovered becau
 
 ## Identity transfer and web administrator recovery
 
+### Identifying client computers
+
+Adapter 0.1.2 automatically reports the OS hostname. Keep `client_label` as a human-friendly note such as `张三·开发机`; no hostname/IP configuration is needed. The administrator client list and pending recovery requests display this note, the reported computer name, a short client ID (hover for the full ID), and the most recent server-observed source IP. Existing last-authenticated timestamps remain visible on the client list.
+
+Computer names are client-reported and are not proof of identity. Source IP comes only from the HTTP request's transport address, never MCP metadata or directly parsed forwarding headers. A reverse proxy/NAT may make multiple computers show the same IP. Configure the ASGI host's trusted proxy handling for the actual proxy addresses if original addresses are required; do not trust arbitrary forwarding headers. Neither hostname nor IP participates in authorization or same-client transfer checks.
+
+Deploy the updated server image and upgrade npm clients to 0.1.2, then reload MCP. Existing credentials and bindings are retained; the database adds display fields automatically. Older clients show no computer name until upgraded, and HTTP IP information updates on successful identity authentication. In-memory/STDIO authentication without an HTTP address does not erase the last observed IP.
+
 Call `recover_agent_identity` or `request_agent_identity_transfer` explicitly when a different task needs an existing Agent. If its active owner belongs to the same authenticated client principal, the transfer completes immediately (`status: transferred`), without browser/native confirmation. The old task loses access, the generation advances, and an audit event is recorded. Repeating the request from the new owner is safe. Ordinary startup still resumes only the current task's own binding; it never silently takes another task's Agent.
 
 “Same client” means the persisted client identity and secret, not the MCP/profile name, client label, or shared HTTP bearer token. A different installation/credential, missing active ownership, or an administrator-revoked ownership requires web recovery. A revoked client cannot transfer; a destination already owning a different Agent must release that identity explicitly first. A former owner may explicitly request a same-client transfer back, but ordinary reconnect never reclaims ownership. Administrator-revoked task bindings require approval.

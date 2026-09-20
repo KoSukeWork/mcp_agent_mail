@@ -243,6 +243,8 @@ class McpClientPrincipal(SQLModel, table=True):
     public_key: Optional[str] = Field(default=None, max_length=4096)
     public_key_fingerprint: Optional[str] = Field(default=None, max_length=128)
     display_label: str = Field(default="", max_length=128)
+    machine_name: str = Field(default="", max_length=255)
+    last_source_ip: str = Field(default="", max_length=45)
     scopes: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False, server_default="[]"))
     status: str = Field(default="active", max_length=16, sa_column_kwargs={"server_default": "active"})
     created_at: datetime = Field(default_factory=_utcnow_naive)

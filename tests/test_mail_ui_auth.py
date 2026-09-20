@@ -61,7 +61,8 @@ async def test_web_admin_recovers_identity_without_mcp_admin_grant(isolated_env,
         await session.commit()
         await session.refresh(agent)
     old = ClientConversationCredentials("old-client-00000001", "A" * 43, "old-conversation-00001", "Old laptop", False)
-    new = ClientConversationCredentials("new-client-00000001", "B" * 43, "new-conversation-00001", "<script>evil()</script>", False)
+    new = ClientConversationCredentials("new-client-00000001", "B" * 43, "new-conversation-00001", "<script>evil()</script>", False,
+                                        machine_name="<img src=x onerror=alert(1)>", source_ip="10.0.0.23")
     await bind_conversation_identity(project, agent, old, allow_client_enrollment=True)
     pending = await request_identity_recovery(project, agent, new, ttl_seconds=300)
     with pytest.raises(ConversationIdentityError):
@@ -78,6 +79,9 @@ async def test_web_admin_recovers_identity_without_mcp_admin_grant(isolated_env,
         assert page.status_code == 200
         assert pending.request.request_uid in page.text
         assert "<script>evil()</script>" not in page.text
+        assert "<img src=x onerror=alert(1)>" not in page.text
+        assert "&lt;img src=x onerror=alert(1)&gt;" in page.text
+        assert "10.0.0.23" in page.text
         assert new.client_secret not in page.text
         assert new.credential_hash not in page.text
         csrf_match = _CSRF_META_RE.search(page.text)

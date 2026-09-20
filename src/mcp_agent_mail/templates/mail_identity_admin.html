@@ -29,7 +29,7 @@
     <tbody>{% for r in requests %}<tr>
       <td><code>{{ r.uid }}</code><br>{{ r.action }}</td>
       <td>{{ r.agent }}<br><code>{{ r.project }}</code><br>{{ _('Generation') }} {{ r.generation }}</td>
-      <td>{{ r.client }}<br>#{{ r.client_id }}</td><td>{{ r.expires }}</td>
+      <td>{{ r.client }}<br>{{ _('Computer name (client reported)') }}: {{ r.machine_name or '—' }}<br>{{ _('Last source IP (server observed)') }}: <code>{{ r.source_ip or '—' }}</code><br>#{{ r.client_id }} · <code title="{{ r.client_uid }}">{{ r.client_uid[:16] }}…</code></td><td>{{ r.expires }}</td>
       <td><button type="button" data-action="approve_request" data-target="{{ r.uid }}" data-label="{{ r.agent }} · {{ r.project }} · {{ r.client }} · {{ r.uid }}">{{ _('Approve recovery / transfer') }}</button>
       <button type="button" data-action="deny_request" data-target="{{ r.uid }}" data-label="{{ r.agent }} · {{ r.uid }}">{{ _('Deny request') }}</button></td>
     </tr>{% else %}<tr><td colspan="5">{{ _('No records on this page.') }}</td></tr>{% endfor %}</tbody>
@@ -40,7 +40,7 @@
   <div class="table-scroll"><table>
     <thead><tr><th>{{ _('Client') }}</th><th>{{ _('Status') }}</th><th>{{ _('Last seen (UTC)') }}</th><th>{{ _('Actions') }}</th></tr></thead>
     <tbody>{% for c in clients %}<tr>
-      <td>#{{ c.id }} · {{ c.label }}<br><code>{{ c.uid }}</code></td><td>{{ c.status }}</td><td>{{ c.last_seen }}</td>
+      <td>#{{ c.id }} · {{ c.label }}<br>{{ _('Computer name (client reported)') }}: {{ c.machine_name or '—' }}<br>{{ _('Last source IP (server observed)') }}: <code>{{ c.source_ip or '—' }}</code><br><code title="{{ c.uid }}">{{ c.uid[:16] }}…</code></td><td>{{ c.status }}</td><td>{{ c.last_seen }}</td>
       <td>{% if c.status == 'active' %}<button type="button" data-action="revoke_client" data-target="{{ c.id }}" data-label="{{ c.label }} · {{ c.uid }}">{{ _('Revoke client') }}</button>
       {% else %}<button type="button" data-action="restore_client" data-target="{{ c.id }}" data-label="{{ c.label }} · {{ c.uid }}">{{ _('Restore client') }}</button>{% endif %}</td>
     </tr>{% else %}<tr><td colspan="4">{{ _('No records on this page.') }}</td></tr>{% endfor %}</tbody>

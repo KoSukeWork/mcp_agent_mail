@@ -44,6 +44,8 @@ _ZH_CN: dict[str, str] = {
     "Deny request": "拒绝申请",
     "No records on this page.": "本页暂无记录。",
     "Trusted clients": "可信客户端",
+    "Computer name (client reported)": "电脑名称（客户端上报）",
+    "Last source IP (server observed)": "最近来源 IP（服务端观察）",
     "Revoking a client invalidates its active bindings and pending requests. Restoring a client allows authentication again; old bindings remain revoked.": "吊销客户端会撤销其现有绑定和待审批申请。恢复客户端只恢复登录资格，旧绑定仍保持撤销状态。",
     "Last seen (UTC)": "最后活动时间（UTC）",
     "Revoke client": "吊销客户端",

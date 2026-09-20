@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, writeFile, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { createServer } from 'node:http';
@@ -182,6 +182,7 @@ test('reserved metadata cannot be spoofed; arguments and progress metadata are p
   const sent = injectIdentity(message, settings, identity);
   assert.equal(sent.params._meta[IDENTITY_META_KEY].conversation_uid, settings.thread);
   assert.equal(sent.params._meta[IDENTITY_META_KEY].client_secret, identity.client_secret);
+  assert.equal(sent.params._meta[IDENTITY_META_KEY].machine_name, hostname().trim().slice(0, 255));
   assert.equal(sent.params._meta.progressToken, 'p1');
   assert.equal(sent.params.arguments.conversation_uid, 'untrusted');
   assert.equal(message.params._meta[IDENTITY_META_KEY].client_secret, 'spoofed');

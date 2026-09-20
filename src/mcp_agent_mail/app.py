@@ -5151,7 +5151,11 @@ def build_mcp_server() -> FastMCP:
 
     def _conversation_credentials(ctx: Context) -> ClientConversationCredentials | None:
         try:
-            return parse_identity_metadata(ctx.request_context.meta)
+            request = ctx.request_context.request
+            # Use transport-observed address only, never client metadata or raw
+            # forwarding headers. Trusted proxy handling belongs to the ASGI host.
+            source_ip = request.client.host if request is not None and request.client else ""
+            return parse_identity_metadata(ctx.request_context.meta, source_ip=source_ip)
         except ConversationIdentityError as exc:
             raise ToolExecutionError(exc.error_type, str(exc), recoverable=True, data=exc.data) from exc
         except ValueError:
