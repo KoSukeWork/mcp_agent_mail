@@ -14,7 +14,7 @@ const registrationSources = [
   ...alpineSources,
   path.resolve('src/mcp_agent_mail/viewer_assets/viewer.js'),
 ];
-const alpineAttributeStart = /\s((?:x-[\w:.-]+)|(?:@[\w:.-]+)|(?::[\w:.-]+))\s*=\s*(["'])/g;
+const alpineAttributeStart = /(?:\s|%\})((?:x-[\w:.-]+)|(?:@[\w:.-]+)|(?::[\w:.-]+))\s*=\s*(["'])/g;
 const alpineDataRegistration = /(?:window\.)?Alpine\.data\(\s*(["'])([$A-Z_a-z][$\w]*)\1/g;
 const inlineEventHandler = /\s(on[a-z][\w:.-]*)\s*=\s*(["'])/gi;
 const namedDataProvider = /^\s*([$A-Z_a-z][$\w]*)\s*(?:\(|$)/;
@@ -82,6 +82,26 @@ if (
   || extractionProbe[0][1] !== '"template".replace("x", () => value)'
 ) {
   failures.push('Alpine attribute scanner failed its single-quote/Jinja extraction probe.');
+}
+
+// Conditional attributes can immediately follow a Jinja block without whitespace.
+// These must be checked too: the former card handler parsed only after a click.
+const conditionalProbe = extractAlpineAttributes(
+  `<div {% if active %}@click="if (!$event.target.closest('a,button,input,select')) window.location.href = {{ href | tojson | forceescape }}"{% endif %} x-show="visible"></div>`,
+);
+if (
+  conditionalProbe.length !== 2
+  || conditionalProbe[0][0] !== '@click'
+  || conditionalProbe[1][0] !== 'x-show'
+) {
+  failures.push('Alpine attribute scanner missed a Jinja-conditional click handler.');
+} else {
+  try {
+    generateRuntimeFunction(conditionalProbe[0][1]);
+    failures.push('CSP parser unexpectedly accepted the unsupported conditional card handler.');
+  } catch {
+    // Expected: this is the exact regression the scanner previously missed.
+  }
 }
 
 for (const sourcePath of registrationSources) {
