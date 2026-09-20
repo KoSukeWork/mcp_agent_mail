@@ -15,7 +15,9 @@ When asked to configure a Codex client, use the npm Node.js adapter, not a Pytho
 
 One npm installation supports any number of MCP services. Each connection uses `command = "agent-mail-adapter"` and `args = ["--profile", "<profile>"]`; store its `url` and `token` in `~/.config/mcp-agent-mail/<profile>.toml`. An explicit `token_env` is optional instead of `token`. Preserve unrelated configuration and do not print credentials. The client's old .env is not loaded; the server's Docker .env remains necessary.
 
-Use adapter 0.1.1 or newer. Run `agent-mail-adapter --profile <profile> --check` for read-only connectivity diagnostics, then reload MCP. This does not verify task metadata: Codex supplies `params._meta.threadId` per tool call, while MCP startup may have no `CODEX_THREAD_ID`. Never hard-code task IDs, supply them in tool arguments, or infer them from the latest conversation. Identity credentials live in the OS credential store, not the TOML profile. After normal session startup, use `identity_status` to verify binding. Preserve endpoint URLs during migration, since identity isolation uses the normalized URL, not the MCP/profile name. Disable only the corresponding obsolete connection to avoid duplicate tools.
+Use adapter 0.1.2 or newer for new installations and upgrades. Run `agent-mail-adapter --profile <profile> --check` for read-only connectivity diagnostics, then reload MCP. This does not verify task metadata: Codex supplies `params._meta.threadId` per tool call, while MCP startup may have no `CODEX_THREAD_ID`. Never hard-code task IDs, supply them in tool arguments, or infer them from the latest conversation. Identity credentials live in the OS credential store, not the TOML profile. After normal session startup, use `identity_status` to verify binding. Preserve endpoint URLs during migration, since identity isolation uses the normalized URL, not the MCP/profile name. Disable only the corresponding obsolete connection to avoid duplicate tools.
+
+Adapter 0.1.2 automatically reports the OS computer name; `client_label` in the profile remains a human-readable note. Updated servers show these alongside a short client ID, last-authenticated time and server-observed source IP in identity administration. No hostname/IP configuration is needed. Proxies or NAT may hide the original IP; do not trust arbitrary forwarding headers. Labels, computer names and IPs help humans distinguish clients but never prove ownership or authorize identity transfer. This display requires both the updated server and adapter; an older client's missing computer name is not a connection failure.
 
 For installation commands and recovery details, see the repository's [adapter guide](https://github.com/KoSukeWork/mcp_agent_mail/blob/main/docs/CODEX_ADAPTER.md). Ordinary mail coordination does not authorize installing or reconfiguring a client.
 
@@ -94,6 +96,18 @@ If `macro_start_session` is unavailable, use this granular fallback:
 `ensure_project` is idempotent and safe to call again for the same key.
 
 ## Read before acting
+
+### Explicit identity transfer and recovery
+
+For a read-only connection or identity check, call `identity_status` instead of a startup macro: startup may create or reactivate an Agent.
+
+When the user explicitly asks to take over an existing Agent, select its owning service and exact project, then call `recover_agent_identity(project_key=..., agent_name=...)` or `request_agent_identity_transfer`. Do this before ordinary startup on an unbound task, so startup does not create a different Agent. Do not silently release an identity if the destination already owns another Agent.
+
+- On updated servers, an active owner on the same authenticated client principal transfers immediately without human approval. Check for `status: transferred`, then verify `identity_status` and resume normally without an Agent name/token. The old task loses access; an explicit transfer back is permitted, but ordinary reconnect never takes ownership back.
+- Cross-client recovery, missing active ownership and administrator-revoked bindings require web administrator approval at the returned `approval_path` (normally `/mail/admin/identity`). A `pending` result is not completion: give the user the request ID and approval location, then stop until approved. Check `identity_confirmation_status` and `identity_status` afterward. Revoked clients must be restored by the administrator; do not rotate credentials to evade revocation.
+- Same-client status is determined by authenticated persisted credentials, not the MCP/profile name, shared bearer token, computer name or IP. This transfer policy is server-side; upgrading npm alone does not enable it. Respect the actual server result on older deployments rather than assuming approval was bypassed.
+
+### Inbox and thread context
 
 The startup macro returns inbox metadata without full bodies. Follow it with:
 
